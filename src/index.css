@@ -1,12 +1,19 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;700;800&display=swap');
 
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 :root {
   --background: #0a0a0c;
   --surface: #121216;
   --card: #1c1c22;
-  --primary: #3b82f6; /* Electric Blue */
-  --secondary: #10b981; /* Emerald Green */
-  --accent: #f59e0b; /* Amber */
+  --primary: #3b82f6;
+  /* Electric Blue */
+  --secondary: #10b981;
+  /* Emerald Green */
+  --accent: #f59e0b;
+  /* Amber */
   --text: #ffffff;
   --text-secondary: #94a3b8;
   --border: #2d2d35;
@@ -31,7 +38,11 @@ body {
   overscroll-behavior-y: none;
 }
 
-h1, h2, h3, h4, .font-display {
+h1,
+h2,
+h3,
+h4,
+.font-display {
   font-family: 'Outfit', sans-serif;
 }
 
