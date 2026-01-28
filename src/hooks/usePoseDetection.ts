@@ -26,8 +26,13 @@ export const usePoseDetection = (options: Options = {}) => {
         });
 
         pose.onResults((res) => {
-            if (timeoutRef.current) clearTimeout(timeoutRef.current);
-            setResults(res);
+            if (timeoutRef.current) {
+                clearTimeout(timeoutRef.current);
+                timeoutRef.current = null;
+            }
+            if (isProcessing.current) {
+                setResults(res);
+            }
             isProcessing.current = false;
         });
 
