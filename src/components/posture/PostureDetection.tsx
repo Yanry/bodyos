@@ -3,7 +3,7 @@ import { usePoseDetection } from '../../hooks/usePoseDetection';
 import { analyzePosture } from '../../utils/postureAnalysis';
 import type { PostureMetrics } from '../../utils/postureAnalysis';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Camera, Upload, Pause, RotateCcw, Video, VideoOff, PlayCircle, StopCircle, RefreshCw, Activity } from 'lucide-react';
+import { Camera, Upload, Pause, RotateCcw, Video, VideoOff, PlayCircle, StopCircle, RefreshCw, Activity, Scan } from 'lucide-react';
 
 const TORSO = [[11, 12], [12, 24], [24, 23], [23, 11]];
 const LEFT_ARM = [[11, 13], [13, 15]];
@@ -21,6 +21,8 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const recordedChunksRef = useRef<Blob[]>([]);
 
     const [method, setMethod] = useState<'camera' | 'upload' | null>(null);
     const { results, detect } = usePoseDetection();
@@ -29,6 +31,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
     const [isDetecting, setIsDetecting] = useState(true);
     const [isRecording, setIsRecording] = useState(false);
     const [isPaused, setIsPaused] = useState(false);
+    const [isSeeking, setIsSeeking] = useState(false);
     const [videoSrc, setVideoSrc] = useState<string | null>(null);
     const [countdown, setCountdown] = useState<number | null>(null);
     const [capturedMetrics, setCapturedMetrics] = useState<PostureMetrics | null>(null);
@@ -36,41 +39,58 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
 
-    // Setup Camera
+    // Setup Camera with explicit track cleanup
     useEffect(() => {
         if (method === 'camera' && videoRef.current) {
+            let currentStream: MediaStream | null = null;
+
             async function setupCamera() {
                 try {
+                    // Stop old tracks first
+                    if (videoRef.current?.srcObject) {
+                        (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
+                    }
+
                     const stream = await navigator.mediaDevices.getUserMedia({
                         video: {
-                            facingMode: facingMode,
+                            facingMode: { ideal: facingMode },
                             width: { ideal: 1280 },
                             height: { ideal: 720 }
                         },
                     });
-                    if (videoRef.current) videoRef.current.srcObject = stream;
+
+                    currentStream = stream;
+                    if (videoRef.current) {
+                        videoRef.current.srcObject = stream;
+                        // Force play
+                        videoRef.current.play().catch(e => console.warn("Auto-play failed", e));
+                    }
                 } catch (err) {
                     console.error("无法访问摄像头:", err);
                     setMethod(null);
                 }
             }
+
             setupCamera();
+
             return () => {
-                if (videoRef.current?.srcObject) {
-                    (videoRef.current.srcObject as MediaStream).getTracks().forEach(track => track.stop());
+                if (currentStream) {
+                    currentStream.getTracks().forEach(track => track.stop());
                 }
             };
         }
     }, [method, facingMode]);
 
-    // Sync Canvas Internal Resolution to Video Source
+    // Sync Canvas Internal Resolution to Video Source (FIX ALIGNMENT)
     useEffect(() => {
         const syncRes = () => {
             const video = videoRef.current;
             const canvas = canvasRef.current;
             if (video && canvas && video.videoWidth > 0) {
+                // Pixel-perfect sync: use intrinsic video resolution
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
+                console.log(`Canvas synced to: ${canvas.width}x${canvas.height}`);
             }
         };
 
@@ -78,6 +98,9 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
         if (video) {
             video.addEventListener('loadedmetadata', syncRes);
             video.addEventListener('play', syncRes);
+            // Also run once if metadata already exists
+            if (video.videoWidth > 0) syncRes();
+
             return () => {
                 video.removeEventListener('loadedmetadata', syncRes);
                 video.removeEventListener('play', syncRes);
@@ -85,12 +108,40 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
         }
     }, [method, videoSrc]);
 
+    // Recording Logic
+    useEffect(() => {
+        if (isRecording && videoRef.current?.srcObject) {
+            const stream = videoRef.current.srcObject as MediaStream;
+            const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+            mediaRecorderRef.current = recorder;
+            recordedChunksRef.current = [];
+
+            recorder.ondataavailable = (event) => {
+                if (event.data.size > 0) recordedChunksRef.current.push(event.data);
+            };
+
+            recorder.onstop = () => {
+                const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `jiyi_recording_${Date.now()}.webm`;
+                a.click();
+                URL.revokeObjectURL(url);
+            };
+
+            recorder.start();
+        } else {
+            mediaRecorderRef.current?.stop();
+        }
+    }, [isRecording]);
+
     // Drawing Helper
     const drawLine = (ctx: CanvasRenderingContext2D, landmarks: any, connections: number[][], color: string) => {
         ctx.strokeStyle = color;
-        ctx.lineWidth = Math.max(2, ctx.canvas.width / 200);
+        ctx.lineWidth = Math.max(3, ctx.canvas.width / 150); // Slightly thicker for visibility
         ctx.lineCap = 'round';
-        ctx.shadowBlur = 10;
+        ctx.shadowBlur = 15;
         ctx.shadowColor = color;
 
         connections.forEach(([i, j]) => {
@@ -126,7 +177,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
             landmarks.forEach((p: any) => {
                 if (p.visibility > 0.5) {
                     canvasCtx.beginPath();
-                    canvasCtx.arc(p.x * canvasCtx.canvas.width, p.y * canvasCtx.canvas.height, Math.max(1, canvasCtx.canvas.width / 300), 0, 2 * Math.PI);
+                    canvasCtx.arc(p.x * canvasCtx.canvas.width, p.y * canvasCtx.canvas.height, Math.max(2, canvasCtx.canvas.width / 250), 0, 2 * Math.PI);
                     canvasCtx.fill();
                 }
             });
@@ -145,7 +196,8 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
             if (!isActive) return;
 
             const video = videoRef.current;
-            if (video && video.readyState >= 2 && !isPaused && isDetecting) {
+            // Readiness check: video must be playing and not paused
+            if (video && video.readyState >= 2 && !video.paused && isDetecting) {
                 try {
                     await detect(video);
                 } catch (e) {
@@ -172,7 +224,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
     const togglePause = () => {
         const video = videoRef.current;
         if (video) {
-            if (isPaused) {
+            if (video.paused) {
                 video.play().catch(console.error);
                 setIsPaused(false);
             } else {
@@ -182,13 +234,15 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
         }
     };
 
-    // Progress update
+    // Progress update (Decoupled with isSeeking)
     useEffect(() => {
         const video = videoRef.current;
         if (video && method === 'upload') {
             const update = () => {
-                setCurrentTime(video.currentTime);
-                setDuration(video.duration);
+                if (!isSeeking) {
+                    setCurrentTime(video.currentTime);
+                    setDuration(video.duration);
+                }
             };
             video.addEventListener('timeupdate', update);
             video.addEventListener('loadedmetadata', update);
@@ -197,7 +251,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                 video.removeEventListener('loadedmetadata', update);
             };
         }
-    }, [method, videoSrc]);
+    }, [method, videoSrc, isSeeking]);
 
     const handleCapture = () => {
         if (results) {
@@ -350,7 +404,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                                         position: 'absolute',
                                         top: 0, left: 0,
                                         width: '100%', height: '100%',
-                                        objectFit: 'contain', // Match video object-fit
+                                        objectFit: 'contain', // CRITICAL: Match video object-fit exactly
                                         transform: (method === 'camera' && facingMode === 'user') ? 'scaleX(-1)' : 'none',
                                         pointerEvents: 'none'
                                     }}
@@ -401,7 +455,12 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                                     <span style={{ fontSize: 11, color: 'var(--text-secondary)', width: 30 }}>{Math.floor(currentTime)}s</span>
                                     <input
                                         type="range" min={0} max={duration || 100} step={0.1}
-                                        value={currentTime} onChange={handleSeek}
+                                        value={currentTime}
+                                        onMouseDown={() => setIsSeeking(true)}
+                                        onMouseUp={() => setIsSeeking(false)}
+                                        onTouchStart={() => setIsSeeking(true)}
+                                        onTouchEnd={() => setIsSeeking(false)}
+                                        onChange={handleSeek}
                                         style={{ flex: 1, accentColor: 'var(--primary)', height: 3, cursor: 'pointer' }}
                                     />
                                     <span style={{ fontSize: 11, color: 'var(--text-secondary)', width: 30 }}>{Math.floor(duration)}s</span>
@@ -457,7 +516,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                                         onClick={handleCapture}
                                         disabled={countdown !== null}
                                     >
-                                        <Camera size={28} />
+                                        <Scan size={28} />
                                     </button>
                                     <p style={{ fontSize: 10, textAlign: 'center', marginTop: 8, color: 'rgba(255,255,255,0.5)', fontWeight: 600 }}>分析当前</p>
                                 </div>

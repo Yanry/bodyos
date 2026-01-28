@@ -70,13 +70,18 @@ export const PostureReport: React.FC<Props> = ({ metrics, onContinue, onRetake }
                         ? "检测到明显的体态失衡，建议先通过「感认知训练」建立正确的身体中立位感觉。"
                         : "你的体态基础不错，可以直接进入「动作精准度检测」，优化发力模式。"}
                 </p>
-                <button
+                <motion.button
+                    whileTap={{ scale: 0.98 }}
+                    whileHover={{ scale: 1.01 }}
                     className="btn-primary"
-                    style={{ width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8 }}
-                    onClick={() => onContinue(isPoor ? 'A' : 'B')}
+                    style={{ width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, cursor: 'pointer', position: 'relative', zIndex: 10 }}
+                    onClick={(e) => {
+                        e.preventDefault();
+                        onContinue(isPoor ? 'A' : 'B');
+                    }}
                 >
                     {isPoor ? "进入：体态感知训练" : "进入：动作检测"} <ArrowRight size={18} />
-                </button>
+                </motion.button>
             </div>
 
             <button
