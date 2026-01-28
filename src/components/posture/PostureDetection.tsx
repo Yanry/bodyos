@@ -4,6 +4,8 @@ import { analyzePosture } from '../../utils/postureAnalysis';
 import type { PostureMetrics } from '../../utils/postureAnalysis';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Camera, Upload, Play, Pause } from 'lucide-react';
+import { POSE_CONNECTIONS } from '@mediapipe/pose';
+import { drawConnectors, drawLandmarks } from '@mediapipe/drawing_utils';
 
 interface Props {
     onComplete: (metrics: PostureMetrics) => void;
@@ -32,7 +34,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                     });
                     if (videoRef.current) videoRef.current.srcObject = stream;
                 } catch (err) {
-                    console.error("Error accessing camera:", err);
+                    console.error("无法访问摄像头:", err);
                     setMethod(null);
                 }
             }
@@ -63,6 +65,25 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
             clearInterval(interval);
         };
     }, []);
+
+    // Drawing Loop
+    useEffect(() => {
+        if (canvasRef.current && results?.poseLandmarks) {
+            const canvasCtx = canvasRef.current.getContext('2d');
+            if (!canvasCtx) return;
+
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+
+            // Draw skeleton
+            drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS,
+                { color: 'rgba(59, 130, 246, 0.8)', lineWidth: 4 });
+            drawLandmarks(canvasCtx, results.poseLandmarks,
+                { color: '#ffffff', lineWidth: 1, radius: 2 });
+
+            canvasCtx.restore();
+        }
+    }, [results]);
 
     // Detection Loop
     useEffect(() => {
@@ -248,7 +269,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                             ) : (
                                 <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20 }}>
                                     <p style={{ color: 'white', textAlign: 'center', opacity: 0.8, fontSize: 14 }}>
-                                        {method === 'camera' ? "请保持身体在框内，且背景简洁" : "播放到体态清晰处点击分析"}
+                                        {method === 'camera' ? "请保持身体在框内，且背景简洁" : "播放到体态清晰处点击拍摄分析"}
                                     </p>
 
                                     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 32 }}>

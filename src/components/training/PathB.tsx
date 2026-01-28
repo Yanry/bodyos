@@ -83,7 +83,7 @@ export const PathB: React.FC<Props> = ({ onComplete, onBack }) => {
                         <h2 style={{ fontSize: 24, fontWeight: 700, marginBottom: 24, marginTop: 20, textAlign: 'center' }}>检测结果</h2>
 
                         <div className="premium-card" style={{ marginBottom: 24 }}>
-                            <h3 style={{ fontSize: 16, marginBottom: 16 }}>发力分布 (Estimated)</h3>
+                            <h3 style={{ fontSize: 16, marginBottom: 16 }}>发力分布 (预估)</h3>
                             <div style={{ display: 'grid', gap: 16 }}>
                                 {[
                                     { label: "股四头肌 (腿前)", value: 70, color: 'var(--primary)' },
