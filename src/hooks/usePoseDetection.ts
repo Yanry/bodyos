@@ -4,6 +4,7 @@ import { Pose } from '@mediapipe/pose';
 
 export const usePoseDetection = (options: Options = {}) => {
     const [results, setResults] = useState<Results | null>(null);
+    const isProcessing = useRef(false);
     const poseRef = useRef<Pose | null>(null);
 
     useEffect(() => {
@@ -25,18 +26,28 @@ export const usePoseDetection = (options: Options = {}) => {
 
         pose.onResults((res) => {
             setResults(res);
+            isProcessing.current = false;
         });
 
         poseRef.current = pose;
 
         return () => {
-            pose.close();
+            if (poseRef.current) {
+                poseRef.current.close();
+                poseRef.current = null;
+            }
         };
     }, []);
 
     const detect = async (videoElement: HTMLVideoElement) => {
-        if (poseRef.current) {
-            await poseRef.current.send({ image: videoElement });
+        if (poseRef.current && !isProcessing.current) {
+            isProcessing.current = true;
+            try {
+                await poseRef.current.send({ image: videoElement });
+            } catch (err) {
+                console.error("Pose detection error:", err);
+                isProcessing.current = false;
+            }
         }
     };
 
