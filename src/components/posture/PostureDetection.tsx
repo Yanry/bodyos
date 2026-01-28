@@ -5,12 +5,11 @@ import type { PostureMetrics } from '../../utils/postureAnalysis';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Camera, Upload, Pause, RotateCcw, Video, VideoOff, PlayCircle, StopCircle, RefreshCw, Activity } from 'lucide-react';
 
-// MediaPipe landmark constants
 const TORSO = [[11, 12], [12, 24], [24, 23], [23, 11]];
 const LEFT_ARM = [[11, 13], [13, 15]];
 const RIGHT_ARM = [[12, 14], [14, 16]];
-const LEFT_LEG = [[23, 25], [25, 27], [27, 29], [29, 31], [27, 31]];
-const RIGHT_LEG = [[24, 26], [26, 28], [28, 30], [30, 32], [28, 32]];
+const LEFT_LEG = [[23, 25], [25, 27], [27, 29], [29, 31]];
+const RIGHT_LEG = [[24, 26], [26, 28], [28, 30], [30, 32]];
 const FACE = [[0, 1], [0, 4], [1, 2], [2, 3], [3, 7], [4, 5], [5, 6], [6, 8]];
 
 interface Props {
@@ -64,33 +63,32 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
         }
     }, [method, facingMode]);
 
-    // Sync Canvas Size to Video Display Area
+    // Sync Canvas Internal Resolution to Video Source
     useEffect(() => {
-        const syncCanvas = () => {
-            if (videoRef.current && canvasRef.current) {
-                const video = videoRef.current;
-                const canvas = canvasRef.current;
-
-                // Use client dimensions of the video element
-                canvas.width = video.clientWidth;
-                canvas.height = video.clientHeight;
+        const syncRes = () => {
+            const video = videoRef.current;
+            const canvas = canvasRef.current;
+            if (video && canvas && video.videoWidth > 0) {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
             }
         };
 
-        const resizeObserver = new ResizeObserver(syncCanvas);
-        if (videoRef.current) resizeObserver.observe(videoRef.current);
-
-        window.addEventListener('resize', syncCanvas);
-        return () => {
-            resizeObserver.disconnect();
-            window.removeEventListener('resize', syncCanvas);
-        };
-    }, []);
+        const video = videoRef.current;
+        if (video) {
+            video.addEventListener('loadedmetadata', syncRes);
+            video.addEventListener('play', syncRes);
+            return () => {
+                video.removeEventListener('loadedmetadata', syncRes);
+                video.removeEventListener('play', syncRes);
+            };
+        }
+    }, [method, videoSrc]);
 
     // Drawing Helper
     const drawLine = (ctx: CanvasRenderingContext2D, landmarks: any, connections: number[][], color: string) => {
         ctx.strokeStyle = color;
-        ctx.lineWidth = 4;
+        ctx.lineWidth = Math.max(2, ctx.canvas.width / 200);
         ctx.lineCap = 'round';
         ctx.shadowBlur = 10;
         ctx.shadowColor = color;
@@ -105,7 +103,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                 ctx.stroke();
             }
         });
-        ctx.shadowBlur = 0; // Reset for next draw
+        ctx.shadowBlur = 0;
     };
 
     // Drawing Loop
@@ -115,58 +113,88 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
             if (!canvasCtx) return;
 
             canvasCtx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-
             const landmarks = results.poseLandmarks;
 
-            // Draw skeleton with different colors
-            drawLine(canvasCtx, landmarks, TORSO, '#3b82f6'); // Blue
-            drawLine(canvasCtx, landmarks, LEFT_ARM, '#10b981'); // Green
-            drawLine(canvasCtx, landmarks, RIGHT_ARM, '#10b981'); // Green
-            drawLine(canvasCtx, landmarks, LEFT_LEG, '#f59e0b'); // Amber
-            drawLine(canvasCtx, landmarks, RIGHT_LEG, '#f59e0b'); // Amber
-            drawLine(canvasCtx, landmarks, FACE, '#ec4899'); // Pink
+            drawLine(canvasCtx, landmarks, TORSO, '#3b82f6');
+            drawLine(canvasCtx, landmarks, LEFT_ARM, '#10b981');
+            drawLine(canvasCtx, landmarks, RIGHT_ARM, '#10b981');
+            drawLine(canvasCtx, landmarks, LEFT_LEG, '#f59e0b');
+            drawLine(canvasCtx, landmarks, RIGHT_LEG, '#f59e0b');
+            drawLine(canvasCtx, landmarks, FACE, '#ec4899');
 
-            // Draw dots
             canvasCtx.fillStyle = 'white';
             landmarks.forEach((p: any) => {
                 if (p.visibility > 0.5) {
                     canvasCtx.beginPath();
-                    canvasCtx.arc(p.x * canvasCtx.canvas.width, p.y * canvasCtx.canvas.height, 3, 0, 2 * Math.PI);
+                    canvasCtx.arc(p.x * canvasCtx.canvas.width, p.y * canvasCtx.canvas.height, Math.max(1, canvasCtx.canvas.width / 300), 0, 2 * Math.PI);
                     canvasCtx.fill();
                 }
             });
-        } else if (canvasRef.current && !isDetecting) {
-            const canvasCtx = canvasRef.current.getContext('2d');
-            canvasCtx?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+        } else if (canvasRef.current) {
+            const ctx = canvasRef.current.getContext('2d');
+            ctx?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
         }
     }, [results, isDetecting]);
 
-    // Detection Loop
+    // Detection Loop - Resilient to pause and stop
     useEffect(() => {
         let animationId: number;
+        let isActive = true;
+
         const runDetection = async () => {
-            if (videoRef.current && videoRef.current.readyState >= 2 && !isPaused && isDetecting) {
-                await detect(videoRef.current);
+            if (!isActive) return;
+
+            const video = videoRef.current;
+            if (video && video.readyState >= 2 && !isPaused && isDetecting) {
+                try {
+                    await detect(video);
+                } catch (e) {
+                    console.error("Detection error in loop", e);
+                }
             }
-            animationId = requestAnimationFrame(runDetection);
+
+            if (isActive) {
+                animationId = requestAnimationFrame(runDetection);
+            }
         };
-        if (method) runDetection();
-        return () => cancelAnimationFrame(animationId);
+
+        if (method) {
+            animationId = requestAnimationFrame(runDetection);
+        }
+
+        return () => {
+            isActive = false;
+            cancelAnimationFrame(animationId);
+        };
     }, [detect, method, isPaused, isDetecting]);
 
-    // Video Progress
+    // Video Actions
+    const togglePause = () => {
+        const video = videoRef.current;
+        if (video) {
+            if (isPaused) {
+                video.play().catch(console.error);
+                setIsPaused(false);
+            } else {
+                video.pause();
+                setIsPaused(true);
+            }
+        }
+    };
+
+    // Progress update
     useEffect(() => {
         const video = videoRef.current;
         if (video && method === 'upload') {
-            const updateProgress = () => {
+            const update = () => {
                 setCurrentTime(video.currentTime);
                 setDuration(video.duration);
             };
-            video.addEventListener('timeupdate', updateProgress);
-            video.addEventListener('loadedmetadata', updateProgress);
+            video.addEventListener('timeupdate', update);
+            video.addEventListener('loadedmetadata', update);
             return () => {
-                video.removeEventListener('timeupdate', updateProgress);
-                video.removeEventListener('loadedmetadata', updateProgress);
+                video.removeEventListener('timeupdate', update);
+                video.removeEventListener('loadedmetadata', update);
             };
         }
     }, [method, videoSrc]);
@@ -177,19 +205,11 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
             if (metrics) {
                 setCapturedMetrics(metrics);
                 setCountdown(3);
-                if (method === 'upload') setIsPaused(true);
+                if (method === 'upload') {
+                    videoRef.current?.pause();
+                    setIsPaused(true);
+                }
             }
-        }
-    };
-
-    const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (file) {
-            const url = URL.createObjectURL(file);
-            setVideoSrc(url);
-            setMethod('upload');
-            setIsDetecting(true);
-            setIsPaused(false);
         }
     };
 
@@ -219,7 +239,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
             style={{ height: '100vh', width: '100%' }}
         >
             <div className="z-20 p-6 flex justify-between items-center bg-gradient-to-b from-black/80 to-transparent">
-                <button onClick={onBack} className="glass" style={{ border: 'none', color: 'white', padding: "8px 16px", borderRadius: 20, fontSize: 14 }}>
+                <button onClick={onBack} className="glass" style={{ border: 'none', color: 'white', padding: "8px 16px", borderRadius: 20, fontSize: 13 }}>
                     返回
                 </button>
                 <h2 style={{ fontSize: 18, fontWeight: 700, color: 'white' }}>
@@ -268,7 +288,15 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                             <input
                                 type="file"
                                 ref={fileInputRef}
-                                onChange={handleFileUpload}
+                                onChange={(e) => {
+                                    const file = e.target.files?.[0];
+                                    if (file) {
+                                        setVideoSrc(URL.createObjectURL(file));
+                                        setMethod('upload');
+                                        setIsDetecting(true);
+                                        setIsPaused(false);
+                                    }
+                                }}
                                 accept="video/*"
                                 style={{ display: 'none' }}
                             />
@@ -287,19 +315,19 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                             flexDirection: 'column',
                             justifyContent: 'center',
                             alignItems: 'center',
-                            padding: '0 20px',
+                            padding: '0 16px',
                             position: 'relative'
                         }}>
                             <div style={{
                                 width: '100%',
                                 maxWidth: '430px',
                                 aspectRatio: '3/4',
-                                background: '#111',
+                                background: '#000',
                                 borderRadius: 24,
                                 overflow: 'hidden',
                                 position: 'relative',
                                 boxShadow: '0 20px 50px rgba(0,0,0,0.5)',
-                                border: '1px solid rgba(255,255,255,0.1)'
+                                border: '1px solid rgba(255,255,255,0.05)'
                             }}>
                                 <video
                                     ref={videoRef}
@@ -311,7 +339,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                                     style={{
                                         width: '100%',
                                         height: '100%',
-                                        objectFit: 'contain', // Changed to contain for alignment
+                                        objectFit: 'contain',
                                         transform: (method === 'camera' && facingMode === 'user') ? 'scaleX(-1)' : 'none'
                                     }}
                                 />
@@ -320,32 +348,24 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                                     ref={canvasRef}
                                     style={{
                                         position: 'absolute',
-                                        top: '50%',
-                                        left: '50%',
-                                        transform: `translate(-50%, -50%) ${(method === 'camera' && facingMode === 'user') ? 'scaleX(-1)' : ''}`,
-                                        width: '100%',
-                                        height: '100%',
-                                        objectFit: 'contain',
+                                        top: 0, left: 0,
+                                        width: '100%', height: '100%',
+                                        objectFit: 'contain', // Match video object-fit
+                                        transform: (method === 'camera' && facingMode === 'user') ? 'scaleX(-1)' : 'none',
                                         pointerEvents: 'none'
                                     }}
                                 />
 
-                                {isDetecting && (
+                                {isDetecting && !isPaused && (
                                     <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                                        <div style={{
-                                            width: '80%',
-                                            height: '80%',
-                                            border: '1px dashed rgba(255,255,255,0.3)',
-                                            borderRadius: 16,
-                                            position: 'relative'
-                                        }}>
+                                        <div style={{ width: '85%', height: '85%', border: '1px dashed rgba(255,255,255,0.2)', borderRadius: 20 }}>
                                             <motion.div
-                                                animate={{ top: ['0%', '100%', '0%'] }}
-                                                transition={{ duration: 3, repeat: Infinity, ease: 'linear' }}
+                                                animate={{ top: ['5%', '95%', '5%'] }}
+                                                transition={{ duration: 4, repeat: Infinity, ease: 'linear' }}
                                                 style={{
-                                                    position: 'absolute', left: 0, right: 0, height: 1,
+                                                    position: 'absolute', left: '5%', right: '5%', height: 1.5,
                                                     background: 'linear-gradient(90deg, transparent, var(--primary), transparent)',
-                                                    boxShadow: '0 0 10px var(--primary)'
+                                                    boxShadow: '0 0 15px var(--primary)'
                                                 }}
                                             />
                                         </div>
@@ -353,34 +373,23 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                                 )}
 
                                 {countdown !== null && (
-                                    <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+                                    <div className="absolute inset-0 flex items-center justify-center bg-black/50 backdrop-blur-md">
                                         <motion.div
                                             key={countdown}
-                                            initial={{ scale: 0.5, opacity: 0 }}
+                                            initial={{ scale: 0.4, opacity: 0 }}
                                             animate={{ scale: 1, opacity: 1 }}
-                                            style={{ fontSize: 100, fontWeight: 800, color: 'white' }}
+                                            style={{ fontSize: 120, fontWeight: 900, color: 'white' }}
                                         >
                                             {countdown > 0 ? countdown : "✓"}
                                         </motion.div>
                                     </div>
                                 )}
                             </div>
-
-                            <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-                                <span style={{ fontSize: 12, padding: '4px 8px', background: 'rgba(255,255,255,0.1)', borderRadius: 8, color: 'var(--text-secondary)' }}>
-                                    {method === 'camera' ? (facingMode === 'user' ? "前置摄像头" : "后置摄像头") : "录像文件"}
-                                </span>
-                                {isRecording && (
-                                    <span style={{ fontSize: 12, padding: '4px 8px', background: 'rgba(239, 68, 68, 0.2)', borderRadius: 8, color: '#ef4444', display: 'flex', alignItems: 'center', gap: 4 }}>
-                                        <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444' }} /> 录制中
-                                    </span>
-                                )}
-                            </div>
                         </div>
 
                         <div className="safe-area-bottom" style={{
-                            background: 'rgba(18, 18, 22, 0.95)',
-                            borderTop: '1px solid var(--border)',
+                            background: 'rgba(10, 10, 12, 0.98)',
+                            borderTop: '1px solid rgba(255,255,255,0.08)',
                             padding: '24px 20px',
                             display: 'flex',
                             flexDirection: 'column',
@@ -389,16 +398,13 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
 
                             {method === 'upload' && (
                                 <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12 }}>
-                                    <span style={{ fontSize: 12, color: 'var(--text-secondary)', width: 35 }}>{Math.floor(currentTime)}s</span>
+                                    <span style={{ fontSize: 11, color: 'var(--text-secondary)', width: 30 }}>{Math.floor(currentTime)}s</span>
                                     <input
-                                        type="range"
-                                        min={0}
-                                        max={duration || 100}
-                                        value={currentTime}
-                                        onChange={handleSeek}
-                                        style={{ flex: 1, accentColor: 'var(--primary)', height: 4 }}
+                                        type="range" min={0} max={duration || 100} step={0.1}
+                                        value={currentTime} onChange={handleSeek}
+                                        style={{ flex: 1, accentColor: 'var(--primary)', height: 3, cursor: 'pointer' }}
                                     />
-                                    <span style={{ fontSize: 12, color: 'var(--text-secondary)', width: 35 }}>{Math.floor(duration)}s</span>
+                                    <span style={{ fontSize: 11, color: 'var(--text-secondary)', width: 30 }}>{Math.floor(duration)}s</span>
                                 </div>
                             )}
 
@@ -407,84 +413,75 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                                     <button
                                         onClick={() => setIsDetecting(!isDetecting)}
                                         style={{
-                                            flex: 1, background: isDetecting ? 'rgba(59, 130, 246, 0.2)' : 'var(--card)',
-                                            border: '1px solid ' + (isDetecting ? 'var(--primary)' : 'var(--border)'),
-                                            color: isDetecting ? 'var(--primary)' : 'white',
-                                            padding: '12px', borderRadius: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4
+                                            flex: 1, background: isDetecting ? 'rgba(59, 130, 246, 0.15)' : 'rgba(255,255,255,0.05)',
+                                            border: '1px solid ' + (isDetecting ? 'rgba(59, 130, 246, 0.5)' : 'rgba(255,255,255,0.1)'),
+                                            color: isDetecting ? 'var(--primary)' : 'rgba(255,255,255,0.6)',
+                                            padding: '12px 6px', borderRadius: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6
                                         }}
                                     >
-                                        {isDetecting ? <Activity size={20} /> : <VideoOff size={20} />}
-                                        <span style={{ fontSize: 11 }}>{isDetecting ? "关检测" : "开检测"}</span>
+                                        {isDetecting ? <Activity size={18} /> : <VideoOff size={18} />}
+                                        <span style={{ fontSize: 10, fontWeight: 600 }}>{isDetecting ? "关检测" : "开检测"}</span>
                                     </button>
 
-                                    {method === 'camera' && (
+                                    {method === 'camera' ? (
                                         <button
                                             onClick={() => setIsRecording(!isRecording)}
                                             style={{
-                                                flex: 1, background: isRecording ? 'rgba(239, 68, 68, 0.2)' : 'var(--card)',
-                                                border: '1px solid ' + (isRecording ? '#ef4444' : 'var(--border)'),
-                                                color: isRecording ? '#ef4444' : 'white',
-                                                padding: '12px', borderRadius: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4
+                                                flex: 1, background: isRecording ? 'rgba(239, 68, 68, 0.15)' : 'rgba(255,255,255,0.05)',
+                                                border: '1px solid ' + (isRecording ? 'rgba(239, 68, 68, 0.5)' : 'rgba(255,255,255,0.1)'),
+                                                color: isRecording ? '#ef4444' : 'rgba(255,255,255,0.6)',
+                                                padding: '12px 6px', borderRadius: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6
                                             }}
                                         >
-                                            {isRecording ? <StopCircle size={20} /> : <Video size={20} />}
-                                            <span style={{ fontSize: 11 }}>{isRecording ? "停录制" : "开录制"}</span>
+                                            {isRecording ? <StopCircle size={18} /> : <Video size={18} />}
+                                            <span style={{ fontSize: 10, fontWeight: 600 }}>{isRecording ? "停录制" : "开录制"}</span>
                                         </button>
-                                    )}
-
-                                    {method === 'upload' && (
+                                    ) : (
                                         <button
-                                            onClick={() => setIsPaused(!isPaused)}
+                                            onClick={togglePause}
                                             style={{
-                                                flex: 1, background: 'var(--card)', border: '1px solid var(--border)',
-                                                color: 'white', padding: '12px', borderRadius: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4
+                                                flex: 1, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+                                                color: 'white', padding: '12px 6px', borderRadius: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6
                                             }}
                                         >
-                                            {isPaused ? <PlayCircle size={20} /> : <Pause size={20} />}
-                                            <span style={{ fontSize: 11 }}>{isPaused ? "播放" : "暂停"}</span>
+                                            {isPaused ? <PlayCircle size={18} /> : <Pause size={18} />}
+                                            <span style={{ fontSize: 10, fontWeight: 600 }}>{isPaused ? "播放" : "暂停"}</span>
                                         </button>
                                     )}
                                 </div>
 
-                                <div style={{ margin: '0 24px' }}>
+                                <div style={{ margin: '0 20px' }}>
                                     <button
                                         className="btn-primary"
-                                        style={{ width: 72, height: 72, borderRadius: '50%', padding: 0, display: 'flex', justifyContent: 'center', alignItems: 'center', background: 'linear-gradient(135deg, var(--primary), var(--secondary))' }}
+                                        style={{ width: 68, height: 68, borderRadius: '50%', padding: 0, display: 'flex', justifyContent: 'center', alignItems: 'center', background: 'linear-gradient(135deg, var(--primary), var(--secondary))', boxShadow: '0 8px 16px rgba(59, 130, 246, 0.3)' }}
                                         onClick={handleCapture}
                                         disabled={countdown !== null}
                                     >
-                                        <Camera size={32} />
+                                        <Camera size={28} />
                                     </button>
-                                    <p style={{ fontSize: 11, textAlign: 'center', marginTop: 8, color: 'var(--text-secondary)' }}>拍摄报告</p>
+                                    <p style={{ fontSize: 10, textAlign: 'center', marginTop: 8, color: 'rgba(255,255,255,0.5)', fontWeight: 600 }}>分析当前</p>
                                 </div>
 
                                 <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
                                     {method === 'camera' && (
                                         <button
-                                            onClick={() => setFacingMode(prev => prev === 'user' ? 'environment' : 'user')}
-                                            style={{
-                                                width: 48, height: 48, borderRadius: 12, background: 'var(--card)',
-                                                border: '1px solid var(--border)', color: 'white', display: 'flex', justifyContent: 'center', alignItems: 'center'
-                                            }}
+                                            onClick={() => setFacingMode(m => m === 'user' ? 'environment' : 'user')}
+                                            style={{ width: 44, height: 44, borderRadius: 12, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', display: 'flex', justifyContent: 'center', alignItems: 'center' }}
                                         >
-                                            <RefreshCw size={20} />
+                                            <RefreshCw size={18} />
                                         </button>
                                     )}
-
                                     <button
-                                        onClick={() => { setMethod(null); setVideoSrc(null); }}
-                                        style={{
-                                            width: 48, height: 48, borderRadius: 12, background: 'var(--card)',
-                                            border: '1px solid var(--border)', color: 'white', display: 'flex', justifyContent: 'center', alignItems: 'center'
-                                        }}
+                                        onClick={() => { setMethod(null); setVideoSrc(null); setIsPaused(false); }}
+                                        style={{ width: 44, height: 44, borderRadius: 12, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', display: 'flex', justifyContent: 'center', alignItems: 'center' }}
                                     >
-                                        <RotateCcw size={20} />
+                                        <RotateCcw size={18} />
                                     </button>
                                 </div>
                             </div>
 
-                            <p style={{ fontSize: 12, color: 'var(--text-secondary)', textAlign: 'center' }}>
-                                {method === 'camera' ? "确保全身入镜，拍摄后生成体态评分" : "拖动进度条，找到体态端正的画面进行分析"}
+                            <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', textAlign: 'center', letterSpacing: '0.02em' }}>
+                                {method === 'camera' ? "确保身体完整入镜，由系统捕捉核心支点" : "请暂停在体态展示最清晰的一帧，点击进行深度分析"}
                             </p>
                         </div>
                     </motion.div>
