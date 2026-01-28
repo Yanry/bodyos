@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import './index.css'
 import { Activity, Camera, TrendingUp, AlertCircle } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -10,8 +10,21 @@ import { PathB } from './components/training/PathB'
 import type { PostureMetrics } from './utils/postureAnalysis'
 
 function App() {
-  const [stage, setStage] = useState<'welcome' | 'detecting' | 'report' | 'pathA' | 'pathB' | 'discomfort'>('welcome')
-  const [metrics, setMetrics] = useState<PostureMetrics | null>(null)
+  const [stage, setStage] = useState<'welcome' | 'detecting' | 'report' | 'pathA' | 'pathB' | 'discomfort'>(() => {
+    return (localStorage.getItem('jiyi-stage') as any) || 'welcome'
+  })
+  const [metrics, setMetrics] = useState<PostureMetrics | null>(() => {
+    const saved = localStorage.getItem('jiyi-metrics')
+    return saved ? JSON.parse(saved) : null
+  })
+
+  useEffect(() => {
+    localStorage.setItem('jiyi-stage', stage)
+  }, [stage])
+
+  useEffect(() => {
+    if (metrics) localStorage.setItem('jiyi-metrics', JSON.stringify(metrics))
+  }, [metrics])
 
   const handlePostureComplete = (m: PostureMetrics) => {
     setMetrics(m)

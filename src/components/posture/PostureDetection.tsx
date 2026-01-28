@@ -3,7 +3,7 @@ import { usePoseDetection } from '../../hooks/usePoseDetection';
 import { analyzePosture } from '../../utils/postureAnalysis';
 import type { PostureMetrics } from '../../utils/postureAnalysis';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Camera, Upload, Play, Pause } from 'lucide-react';
+import { Camera, Upload, Pause, RotateCcw, Video, VideoOff, PlayCircle, StopCircle, RefreshCw, Activity } from 'lucide-react';
 import { POSE_CONNECTIONS } from '@mediapipe/pose';
 import { drawConnectors, drawLandmarks } from '@mediapipe/drawing_utils';
 
@@ -19,10 +19,19 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
 
     const [method, setMethod] = useState<'camera' | 'upload' | null>(null);
     const { results, detect } = usePoseDetection();
-    const [countdown, setCountdown] = useState<number | null>(null);
-    const [capturedMetrics, setCapturedMetrics] = useState<PostureMetrics | null>(null);
+
+    // States for new features
+    const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
+    const [isDetecting, setIsDetecting] = useState(true);
+    const [isRecording, setIsRecording] = useState(false);
     const [isPaused, setIsPaused] = useState(false);
     const [videoSrc, setVideoSrc] = useState<string | null>(null);
+    const [countdown, setCountdown] = useState<number | null>(null);
+    const [capturedMetrics, setCapturedMetrics] = useState<PostureMetrics | null>(null);
+
+    // Progress bar states
+    const [currentTime, setCurrentTime] = useState(0);
+    const [duration, setDuration] = useState(0);
 
     // Setup Camera
     useEffect(() => {
@@ -30,7 +39,11 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
             async function setupCamera() {
                 try {
                     const stream = await navigator.mediaDevices.getUserMedia({
-                        video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+                        video: {
+                            facingMode: facingMode,
+                            width: { ideal: 1280 },
+                            height: { ideal: 720 }
+                        },
                     });
                     if (videoRef.current) videoRef.current.srcObject = stream;
                 } catch (err) {
@@ -45,7 +58,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                 }
             };
         }
-    }, [method]);
+    }, [method, facingMode]);
 
     // Sync Canvas Size
     useEffect(() => {
@@ -53,13 +66,14 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
             if (videoRef.current && canvasRef.current) {
                 const video = videoRef.current;
                 const canvas = canvasRef.current;
-                canvas.width = video.clientWidth;
-                canvas.height = video.clientHeight;
+                const rect = video.getBoundingClientRect();
+                canvas.width = rect.width;
+                canvas.height = rect.height;
             }
         };
 
         window.addEventListener('resize', syncCanvas);
-        const interval = setInterval(syncCanvas, 1000); // Periodic check for layout changes
+        const interval = setInterval(syncCanvas, 1000);
         return () => {
             window.removeEventListener('resize', syncCanvas);
             clearInterval(interval);
@@ -68,35 +82,55 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
 
     // Drawing Loop
     useEffect(() => {
-        if (canvasRef.current && results?.poseLandmarks) {
+        if (canvasRef.current && results?.poseLandmarks && isDetecting) {
             const canvasCtx = canvasRef.current.getContext('2d');
             if (!canvasCtx) return;
 
-            canvasCtx.save();
             canvasCtx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
 
-            // Draw skeleton
-            drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS,
-                { color: 'rgba(59, 130, 246, 0.8)', lineWidth: 4 });
-            drawLandmarks(canvasCtx, results.poseLandmarks,
-                { color: '#ffffff', lineWidth: 1, radius: 2 });
-
-            canvasCtx.restore();
+            const video = videoRef.current;
+            if (video) {
+                // Draw skeleton
+                drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS,
+                    { color: 'rgba(59, 130, 246, 0.8)', lineWidth: 4 });
+                drawLandmarks(canvasCtx, results.poseLandmarks,
+                    { color: '#ffffff', lineWidth: 1, radius: 2 });
+            }
+        } else if (canvasRef.current && !isDetecting) {
+            const canvasCtx = canvasRef.current.getContext('2d');
+            canvasCtx?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
         }
-    }, [results]);
+    }, [results, isDetecting]);
 
     // Detection Loop
     useEffect(() => {
         let animationId: number;
         const runDetection = async () => {
-            if (videoRef.current && videoRef.current.readyState >= 2 && !isPaused) {
+            if (videoRef.current && videoRef.current.readyState >= 2 && !isPaused && isDetecting) {
                 await detect(videoRef.current);
             }
             animationId = requestAnimationFrame(runDetection);
         };
         if (method) runDetection();
         return () => cancelAnimationFrame(animationId);
-    }, [detect, method, isPaused]);
+    }, [detect, method, isPaused, isDetecting]);
+
+    // Video Progress Update
+    useEffect(() => {
+        const video = videoRef.current;
+        if (video && method === 'upload') {
+            const updateProgress = () => {
+                setCurrentTime(video.currentTime);
+                setDuration(video.duration);
+            };
+            video.addEventListener('timeupdate', updateProgress);
+            video.addEventListener('loadedmetadata', updateProgress);
+            return () => {
+                video.removeEventListener('timeupdate', updateProgress);
+                video.removeEventListener('loadedmetadata', updateProgress);
+            };
+        }
+    }, [method, videoSrc]);
 
     const handleCapture = () => {
         if (results) {
@@ -115,6 +149,16 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
             const url = URL.createObjectURL(file);
             setVideoSrc(url);
             setMethod('upload');
+            setIsDetecting(true);
+        }
+    };
+
+    const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const video = videoRef.current;
+        if (video) {
+            const time = parseFloat(e.target.value);
+            video.currentTime = time;
+            setCurrentTime(time);
         }
     };
 
@@ -127,6 +171,10 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
         }
     }, [countdown, capturedMetrics, onComplete]);
 
+    const toggleCamera = () => {
+        setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
+    };
+
     return (
         <motion.div
             initial={{ opacity: 0 }}
@@ -135,40 +183,37 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
             style={{ height: '100vh', width: '100%' }}
         >
             {/* Header */}
-            <div className="absolute top-0 left-0 right-0 z-20 p-6 flex justify-between items-center bg-gradient-to-b from-black/60 to-transparent">
-                <button onClick={onBack} style={{ background: 'rgba(255,255,255,0.1)', border: 'none', color: 'white', padding: "8px 16px", borderRadius: 20, backdropFilter: 'blur(10px)', fontSize: 14 }}>
+            <div className="z-20 p-6 flex justify-between items-center bg-gradient-to-b from-black/80 to-transparent">
+                <button onClick={onBack} className="glass" style={{ border: 'none', color: 'white', padding: "8px 16px", borderRadius: 20, fontSize: 14 }}>
                     返回
                 </button>
-                {method && (
-                    <button onClick={() => { setMethod(null); setVideoSrc(null); setIsPaused(false); }} style={{ background: 'rgba(255,255,255,0.1)', border: 'none', color: 'white', padding: "8px 16px", borderRadius: 20, backdropFilter: 'blur(10px)', fontSize: 14 }}>
-                        重选模式
-                    </button>
-                )}
+                <h2 style={{ fontSize: 18, fontWeight: 700, color: 'white' }}>
+                    {!method ? "体态检测" : method === 'camera' ? "实时拍摄" : "录像分析"}
+                </h2>
+                <div style={{ width: 60 }} /> {/* Spacer */}
             </div>
 
             <AnimatePresence mode="wait">
                 {!method ? (
                     <motion.div
                         key="selector"
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
+                        initial={{ opacity: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, scale: 1 }}
                         exit={{ opacity: 0, scale: 0.95 }}
                         className="flex-1 flex flex-col items-center justify-center p-6 gap-6"
                     >
-                        <h2 style={{ fontSize: 24, fontWeight: 700, textAlign: 'center', marginBottom: 20 }}>选择体态检测方式</h2>
-
                         <motion.div
                             whileTap={{ scale: 0.98 }}
                             className="premium-card"
                             style={{ width: '100%', maxWidth: 300, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, cursor: 'pointer' }}
-                            onClick={() => setMethod('camera')}
+                            onClick={() => { setMethod('camera'); setIsDetecting(true); }}
                         >
                             <div style={{ background: 'rgba(59, 130, 246, 0.2)', padding: 20, borderRadius: '50%' }}>
                                 <Camera size={40} color="var(--primary)" />
                             </div>
                             <div style={{ textAlign: 'center' }}>
                                 <h3 style={{ fontSize: 18, marginBottom: 4 }}>实时拍摄</h3>
-                                <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>使用前置摄像头进行实时分析</p>
+                                <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>使用前后摄像头进行实时分析</p>
                             </div>
                         </motion.div>
 
@@ -199,104 +244,224 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                         key="display"
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
-                        className="flex-1 flex flex-col relative bg-black"
+                        className="flex-1 flex flex-col"
                     >
-                        {/* Video Container - Aspect Ratio Box */}
+                        {/* Video Box (Framed) */}
                         <div style={{
-                            position: 'relative',
-                            width: '100%',
-                            height: '100%',
+                            flex: 1,
                             display: 'flex',
-                            alignItems: 'center',
+                            flexDirection: 'column',
                             justifyContent: 'center',
-                            overflow: 'hidden'
+                            alignItems: 'center',
+                            padding: '0 20px',
+                            position: 'relative'
                         }}>
-                            <video
-                                ref={videoRef}
-                                autoPlay
-                                playsInline
-                                muted
-                                loop={method === 'upload'}
-                                src={videoSrc || undefined}
-                                style={{
-                                    maxWidth: '100%',
-                                    maxHeight: '100%',
-                                    objectFit: 'contain',
-                                    transform: method === 'camera' ? 'scaleX(-1)' : 'none'
-                                }}
-                            />
+                            <div style={{
+                                width: '100%',
+                                maxWidth: '430px', // Mobile width
+                                aspectRatio: '3/4', // Modern mobile ratio
+                                background: '#111',
+                                borderRadius: 24,
+                                overflow: 'hidden',
+                                position: 'relative',
+                                boxShadow: '0 20px 50px rgba(0,0,0,0.5)',
+                                border: '1px solid rgba(255,255,255,0.1)'
+                            }}>
+                                <video
+                                    ref={videoRef}
+                                    autoPlay
+                                    playsInline
+                                    muted
+                                    loop={method === 'upload'}
+                                    src={videoSrc || undefined}
+                                    style={{
+                                        width: '100%',
+                                        height: '100%',
+                                        objectFit: 'cover',
+                                        transform: (method === 'camera' && facingMode === 'user') ? 'scaleX(-1)' : 'none'
+                                    }}
+                                />
 
-                            <canvas
-                                ref={canvasRef}
-                                style={{
-                                    position: 'absolute',
-                                    top: '50%',
-                                    left: '50%',
-                                    transform: `translate(-50%, -50%) ${method === 'camera' ? 'scaleX(-1)' : ''}`,
-                                    width: '100%',
-                                    height: '100%',
-                                    objectFit: 'contain',
-                                    pointerEvents: 'none'
-                                }}
-                            />
+                                <canvas
+                                    ref={canvasRef}
+                                    style={{
+                                        position: 'absolute',
+                                        inset: 0,
+                                        width: '100%',
+                                        height: '100%',
+                                        transform: (method === 'camera' && facingMode === 'user') ? 'scaleX(-1)' : 'none',
+                                        pointerEvents: 'none'
+                                    }}
+                                />
 
-                            {/* Scanning Overlay */}
-                            <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none p-10">
-                                <div style={{
-                                    width: '100%',
-                                    height: '80%',
-                                    border: '2px dashed rgba(255,255,255,0.2)',
-                                    borderRadius: 24,
-                                    position: 'relative'
-                                }}>
-                                    <motion.div
-                                        animate={{ top: ['0%', '100%', '0%'] }}
-                                        transition={{ duration: 4, repeat: Infinity, ease: 'linear' }}
-                                        style={{
-                                            position: 'absolute', left: 0, right: 0, height: 2,
-                                            background: 'linear-gradient(90deg, transparent, var(--primary), transparent)',
-                                            boxShadow: '0 0 15px var(--primary)'
-                                        }}
-                                    />
-                                </div>
+                                {/* Scanning Overlay */}
+                                {isDetecting && (
+                                    <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                                        <div style={{
+                                            width: '80%',
+                                            height: '80%',
+                                            border: '1px dashed rgba(255,255,255,0.3)',
+                                            borderRadius: 16,
+                                            position: 'relative'
+                                        }}>
+                                            <motion.div
+                                                animate={{ top: ['0%', '100%', '0%'] }}
+                                                transition={{ duration: 3, repeat: Infinity, ease: 'linear' }}
+                                                style={{
+                                                    position: 'absolute', left: 0, right: 0, height: 1,
+                                                    background: 'linear-gradient(90deg, transparent, var(--primary), transparent)',
+                                                    boxShadow: '0 0 10px var(--primary)'
+                                                }}
+                                            />
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Countdown Overlay */}
+                                {countdown !== null && (
+                                    <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+                                        <motion.div
+                                            key={countdown}
+                                            initial={{ scale: 0.5, opacity: 0 }}
+                                            animate={{ scale: 1, opacity: 1 }}
+                                            style={{ fontSize: 100, fontWeight: 800, color: 'white' }}
+                                        >
+                                            {countdown > 0 ? countdown : "✓"}
+                                        </motion.div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Method Label */}
+                            <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+                                <span style={{ fontSize: 12, padding: '4px 8px', background: 'rgba(255,255,255,0.1)', borderRadius: 8, color: 'var(--text-secondary)' }}>
+                                    {method === 'camera' ? (facingMode === 'user' ? "前置摄像头" : "后置摄像头") : "录像文件"}
+                                </span>
+                                {isRecording && (
+                                    <span style={{ fontSize: 12, padding: '4px 8px', background: 'rgba(239, 68, 68, 0.2)', borderRadius: 8, color: '#ef4444', display: 'flex', alignItems: 'center', gap: 4 }}>
+                                        <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444' }} /> 录制中
+                                    </span>
+                                )}
                             </div>
                         </div>
 
-                        {/* Controls */}
-                        <div className="absolute bottom-0 left-0 right-0 p-8 flex flex-col items-center bg-gradient-to-t from-black/80 to-transparent">
-                            {countdown !== null ? (
-                                <div style={{ fontSize: 72, fontWeight: 800, color: 'white', textShadow: '0 0 20px rgba(0,0,0,0.5)' }}>{countdown}</div>
-                            ) : (
-                                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20 }}>
-                                    <p style={{ color: 'white', textAlign: 'center', opacity: 0.8, fontSize: 14 }}>
-                                        {method === 'camera' ? "请保持身体在框内，且背景简洁" : "播放到体态清晰处点击拍摄分析"}
-                                    </p>
+                        {/* Control Panel (Bottom) */}
+                        <div className="safe-area-bottom" style={{
+                            background: 'rgba(18, 18, 22, 0.95)',
+                            borderTop: '1px solid var(--border)',
+                            padding: '24px 20px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 20
+                        }}>
 
-                                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 32 }}>
-                                        {method === 'upload' && (
-                                            <button
-                                                className="glass"
-                                                style={{ width: 56, height: 56, borderRadius: '50%', display: 'flex', justifyContent: 'center', alignItems: 'center', border: 'none', color: 'white' }}
-                                                onClick={() => setIsPaused(!isPaused)}
-                                            >
-                                                {isPaused ? <Play size={24} fill="white" /> : <Pause size={24} fill="white" />}
-                                            </button>
-                                        )}
-
-                                        <button
-                                            className="btn-primary"
-                                            style={{ width: 80, height: 80, borderRadius: '50%', padding: 0, display: 'flex', justifyContent: 'center', alignItems: 'center' }}
-                                            onClick={handleCapture}
-                                        >
-                                            <Camera size={32} />
-                                        </button>
-
-                                        {method === 'upload' && (
-                                            <div style={{ width: 56 }} /> // Spacer
-                                        )}
-                                    </div>
+                            {/* Progress Bar (Only for Upload) */}
+                            {method === 'upload' && (
+                                <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12 }}>
+                                    <span style={{ fontSize: 12, color: 'var(--text-secondary)', width: 35 }}>{Math.floor(currentTime)}s</span>
+                                    <input
+                                        type="range"
+                                        min={0}
+                                        max={duration || 100}
+                                        value={currentTime}
+                                        onChange={handleSeek}
+                                        style={{ flex: 1, accentColor: 'var(--primary)' }}
+                                    />
+                                    <span style={{ fontSize: 12, color: 'var(--text-secondary)', width: 35 }}>{Math.floor(duration)}s</span>
                                 </div>
                             )}
+
+                            {/* Functional Buttons */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div style={{ flex: 1, display: 'flex', gap: 12 }}>
+                                    {/* Toggle Analysis */}
+                                    <button
+                                        onClick={() => setIsDetecting(!isDetecting)}
+                                        style={{
+                                            flex: 1, background: isDetecting ? 'rgba(59, 130, 246, 0.2)' : 'var(--card)',
+                                            border: '1px solid ' + (isDetecting ? 'var(--primary)' : 'var(--border)'),
+                                            color: isDetecting ? 'var(--primary)' : 'white',
+                                            padding: '12px', borderRadius: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4
+                                        }}
+                                    >
+                                        {isDetecting ? <Activity size={20} /> : <VideoOff size={20} />}
+                                        <span style={{ fontSize: 11 }}>{isDetecting ? "停止检测" : "开启检测"}</span>
+                                    </button>
+
+                                    {/* Toggle Recording (Only for Camera) */}
+                                    {method === 'camera' && (
+                                        <button
+                                            onClick={() => setIsRecording(!isRecording)}
+                                            style={{
+                                                flex: 1, background: isRecording ? 'rgba(239, 68, 68, 0.2)' : 'var(--card)',
+                                                border: '1px solid ' + (isRecording ? '#ef4444' : 'var(--border)'),
+                                                color: isRecording ? '#ef4444' : 'white',
+                                                padding: '12px', borderRadius: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4
+                                            }}
+                                        >
+                                            {isRecording ? <StopCircle size={20} /> : <Video size={20} />}
+                                            <span style={{ fontSize: 11 }}>{isRecording ? "停止录像" : "开始录像"}</span>
+                                        </button>
+                                    )}
+
+                                    {/* Back/Reselect for Upload */}
+                                    {method === 'upload' && (
+                                        <button
+                                            onClick={() => setIsPaused(!isPaused)}
+                                            style={{
+                                                flex: 1, background: 'var(--card)', border: '1px solid var(--border)',
+                                                color: 'white', padding: '12px', borderRadius: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4
+                                            }}
+                                        >
+                                            {isPaused ? <PlayCircle size={20} /> : <Pause size={20} />}
+                                            <span style={{ fontSize: 11 }}>{isPaused ? "继续播放" : "暂停播放"}</span>
+                                        </button>
+                                    )}
+                                </div>
+
+                                {/* Main Capture Button */}
+                                <div style={{ margin: '0 24px' }}>
+                                    <button
+                                        className="btn-primary"
+                                        style={{ width: 72, height: 72, borderRadius: '50%', padding: 0, display: 'flex', justifyContent: 'center', alignItems: 'center', background: 'linear-gradient(135deg, var(--primary), var(--secondary))' }}
+                                        onClick={handleCapture}
+                                        disabled={countdown !== null}
+                                    >
+                                        <Camera size={32} />
+                                    </button>
+                                    <p style={{ fontSize: 11, textAlign: 'center', marginTop: 8, color: 'var(--text-secondary)' }}>分析当前</p>
+                                </div>
+
+                                {/* Secondary Actions */}
+                                <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
+                                    {method === 'camera' && (
+                                        <button
+                                            onClick={toggleCamera}
+                                            style={{
+                                                width: 48, height: 48, borderRadius: 12, background: 'var(--card)',
+                                                border: '1px solid var(--border)', color: 'white', display: 'flex', justifyContent: 'center', alignItems: 'center'
+                                            }}
+                                        >
+                                            <RefreshCw size={20} />
+                                        </button>
+                                    )}
+
+                                    <button
+                                        onClick={() => { setMethod(null); setVideoSrc(null); }}
+                                        style={{
+                                            width: 48, height: 48, borderRadius: 12, background: 'var(--card)',
+                                            border: '1px solid var(--border)', color: 'white', display: 'flex', justifyContent: 'center', alignItems: 'center'
+                                        }}
+                                    >
+                                        <RotateCcw size={20} />
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Hint */}
+                            <p style={{ fontSize: 12, color: 'var(--text-secondary)', textAlign: 'center' }}>
+                                {method === 'camera' ? "确保全身入镜，拍摄后生成报告" : "拖动进度条或播放视频，选择清晰帧拍摄"}
+                            </p>
                         </div>
                     </motion.div>
                 )}
