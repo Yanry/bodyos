@@ -32,7 +32,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
     const [method, setMethod] = useState<'camera' | 'upload' | null>(null);
     const { results, detect } = usePoseDetection();
 
-    const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
+    const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment');
     const [isDetecting, setIsDetecting] = useState(true);
     const [isRecording, setIsRecording] = useState(false);
     const [isPaused, setIsPaused] = useState(false);
