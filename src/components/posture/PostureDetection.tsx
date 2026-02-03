@@ -46,40 +46,60 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
             let isActive = true;
 
             const setupCamera = async () => {
-                try {
-                    // 1. Stop old tracks
-                    const oldStream = videoRef.current?.srcObject;
-                    if (oldStream instanceof MediaStream) {
-                        oldStream.getTracks().forEach(t => t.stop());
-                    }
-                    if (videoRef.current) videoRef.current.srcObject = null;
+                // 1. Stop old tracks
+                const oldStream = videoRef.current?.srcObject;
+                if (oldStream instanceof MediaStream) {
+                    oldStream.getTracks().forEach(t => t.stop());
+                }
+                if (videoRef.current) videoRef.current.srcObject = null;
 
-                    // 2. Request new stream
-                    const stream = await navigator.mediaDevices.getUserMedia({
+                const constraints = [
+                    {
                         video: {
                             facingMode: { ideal: facingMode },
                             width: { ideal: 1280 },
                             height: { ideal: 720 }
-                        },
-                    });
+                        }
+                    },
+                    {
+                        video: {
+                            facingMode: facingMode, // Try exact if ideal fails
+                        }
+                    },
+                    { video: true } // Absolute fallback
+                ];
 
-                    if (!isActive) {
-                        stream.getTracks().forEach(t => t.stop());
-                        return;
-                    }
+                let stream: MediaStream | null = null;
+                let lastError: any = null;
 
-                    currentStream = stream;
-                    if (videoRef.current) {
-                        videoRef.current.srcObject = stream;
-                        // Some browsers need a short delay or explicit play call
-                        videoRef.current.play().catch(e => console.warn("Camera play failed", e));
+                for (const constraint of constraints) {
+                    try {
+                        stream = await navigator.mediaDevices.getUserMedia(constraint);
+                        if (stream) break;
+                    } catch (err) {
+                        lastError = err;
+                        console.warn(`Constraint failed, trying next...`, constraint, err);
                     }
-                } catch (err) {
-                    console.error("Camera access failed:", err);
+                }
+
+                if (!stream) {
+                    console.error("All camera constraints failed:", lastError);
                     if (isActive) {
-                        alert("无法访问摄像头，请检查权限。");
+                        alert("无法访问摄像头，请确保您已授予权限且摄像头未被其他程序占用。");
                         setMethod(null);
                     }
+                    return;
+                }
+
+                if (!isActive) {
+                    stream.getTracks().forEach(t => t.stop());
+                    return;
+                }
+
+                currentStream = stream;
+                if (videoRef.current) {
+                    videoRef.current.srcObject = stream;
+                    videoRef.current.play().catch(e => console.warn("Camera play failed", e));
                 }
             };
 
