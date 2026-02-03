@@ -28,11 +28,12 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
     const recordedChunksRef = useRef<Blob[]>([]);
     const lastVoiceRef = useRef<number>(0);
     const lastMsgRef = useRef<string | null>(null);
+    const retryCountRef = useRef<number>(0);
 
     const [method, setMethod] = useState<'camera' | 'upload' | null>(null);
     const { results, detect } = usePoseDetection();
 
-    const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment');
+    const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
     const [isDetecting, setIsDetecting] = useState(true);
     const [isRecording, setIsRecording] = useState(false);
     const [isPaused, setIsPaused] = useState(false);
@@ -47,23 +48,24 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
     // Frame alert state
     const [frameAlert, setFrameAlert] = useState<string | null>(null);
 
-    // Setup Camera with robust track handling and state lock
+    // Setup Camera with robust track handling and watchdog timer
     useEffect(() => {
         if (method === 'camera' && videoRef.current) {
             let currentStream: MediaStream | null = null;
             let isActive = true;
+            let watchdog: any;
 
             const setupCamera = async () => {
-                const oldStream = videoRef.current?.srcObject;
-                if (oldStream instanceof MediaStream) {
-                    oldStream.getTracks().forEach(t => t.stop());
+                // Ensure previous resources are clean
+                if (videoRef.current?.srcObject instanceof MediaStream) {
+                    videoRef.current.srcObject.getTracks().forEach(t => t.stop());
                 }
                 if (videoRef.current) videoRef.current.srcObject = null;
 
                 const constraints = [
                     {
                         video: {
-                            facingMode: { exact: facingMode },
+                            facingMode: { ideal: facingMode }, // Use ideal for broader compatibility
                             width: { ideal: 1280 },
                             height: { ideal: 720 }
                         }
@@ -75,9 +77,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                             height: { ideal: 480 }
                         }
                     },
-                    {
-                        video: { facingMode: facingMode }
-                    },
+                    { video: { facingMode: facingMode } },
                     { video: true }
                 ];
 
@@ -86,46 +86,60 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
 
                 for (let i = 0; i < constraints.length; i++) {
                     try {
-                        console.log(`Attempting camera constraint ${i}:`, constraints[i]);
+                        console.log(`[Camera] Attempting constraint ${i}:`, constraints[i]);
                         stream = await navigator.mediaDevices.getUserMedia(constraints[i]);
                         if (stream) {
-                            console.log(`Successfully connected via constraint ${i}`);
+                            console.log(`[Camera] Connected successfully via constraint ${i}`);
                             break;
                         }
                     } catch (err: any) {
                         lastError = err;
-                        console.warn(`Constraint ${i} failed:`, err.message || err);
+                        console.warn(`[Camera] Constraint ${i} failed:`, err.message || err);
                     }
                 }
 
-                if (!stream) {
-                    console.error("All camera constraints failed:", lastError);
-                    if (isActive) {
+                if (!stream || !isActive) {
+                    if (stream) stream.getTracks().forEach(t => t.stop());
+                    if (!stream && isActive) {
+                        console.error("[Camera] All constraints failed:", lastError);
                         alert("无法访问摄像头，请确保您已授予权限且摄像头未被其他程序占用。");
                         setMethod(null);
                     }
                     return;
                 }
 
-                if (!isActive) {
-                    stream.getTracks().forEach(t => t.stop());
-                    return;
-                }
-
                 currentStream = stream;
                 if (videoRef.current) {
                     videoRef.current.srcObject = stream;
-                    videoRef.current.play().catch(e => console.warn("Camera play failed", e));
+                    try {
+                        await videoRef.current.play();
+                        console.log("[Camera] Video playback started");
+
+                        // Start Watchdog: If no pixels after 3s, retry once
+                        watchdog = setTimeout(() => {
+                            if (isActive && videoRef.current && videoRef.current.videoWidth === 0 && retryCountRef.current < 1) {
+                                console.warn("[Camera] Watchdog triggered - No video feed detected. Retrying...");
+                                retryCountRef.current += 1;
+                                setupCamera();
+                            }
+                        }, 3000);
+                    } catch (e) {
+                        console.warn("[Camera] Playback failed", e);
+                    }
                 }
             };
 
-            setupCamera();
+            // Small delay to ensure DOM is ready during transition
+            const mountTimeout = setTimeout(setupCamera, 100);
 
             return () => {
                 isActive = false;
+                clearTimeout(mountTimeout);
+                clearTimeout(watchdog);
                 if (currentStream) {
                     currentStream.getTracks().forEach(track => track.stop());
                 }
+                retryCountRef.current = 0; // Reset on unmount
             };
         }
     }, [method, facingMode]);
