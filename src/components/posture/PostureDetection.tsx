@@ -3,7 +3,7 @@ import { usePoseDetection } from '../../hooks/usePoseDetection';
 import { analyzePosture } from '../../utils/postureAnalysis';
 import type { PostureMetrics } from '../../utils/postureAnalysis';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Camera, Upload, Pause, RotateCcw, Video, VideoOff, PlayCircle, StopCircle, RefreshCw, Activity, Scan } from 'lucide-react';
+import { Camera, Upload, Pause, RotateCcw, Video, VideoOff, PlayCircle, StopCircle, RefreshCw, Activity, Scan, AlertCircle } from 'lucide-react';
 
 const TORSO = [[11, 12], [12, 24], [24, 23], [23, 11]];
 const LEFT_ARM = [[11, 13], [13, 15]];
@@ -11,6 +11,9 @@ const RIGHT_ARM = [[12, 14], [14, 16]];
 const LEFT_LEG = [[23, 25], [25, 27], [27, 29], [29, 31]];
 const RIGHT_LEG = [[24, 26], [26, 28], [28, 30], [30, 32]];
 const FACE = [[0, 1], [0, 4], [1, 2], [2, 3], [3, 7], [4, 5], [5, 6], [6, 8]];
+
+// Landmarks to monitor for visibility/clipping
+const CRITICAL_LANDMARKS = [0, 15, 16, 23, 24, 27, 28, 31, 32];
 
 interface Props {
     onComplete: (metrics: PostureMetrics) => void;
@@ -23,6 +26,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const recordedChunksRef = useRef<Blob[]>([]);
+    const lastVoiceRef = useRef<number>(0);
 
     const [method, setMethod] = useState<'camera' | 'upload' | null>(null);
     const { results, detect } = usePoseDetection();
@@ -39,6 +43,9 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
 
+    // Frame alert state
+    const [frameAlert, setFrameAlert] = useState<string | null>(null);
+
     // Setup Camera with robust track handling and state lock
     useEffect(() => {
         if (method === 'camera' && videoRef.current) {
@@ -46,7 +53,6 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
             let isActive = true;
 
             const setupCamera = async () => {
-                // 1. Stop old tracks
                 const oldStream = videoRef.current?.srcObject;
                 if (oldStream instanceof MediaStream) {
                     oldStream.getTracks().forEach(t => t.stop());
@@ -62,11 +68,9 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                         }
                     },
                     {
-                        video: {
-                            facingMode: facingMode, // Try exact if ideal fails
-                        }
+                        video: { facingMode: facingMode }
                     },
-                    { video: true } // Absolute fallback
+                    { video: true }
                 ];
 
                 let stream: MediaStream | null = null;
@@ -138,6 +142,49 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
             };
         }
     }, [method, videoSrc]);
+
+    // UI Feedback & Direction Logic
+    useEffect(() => {
+        if (!results?.poseLandmarks || !isDetecting || isPaused) {
+            setFrameAlert(null);
+            return;
+        }
+
+        const landmarks = results.poseLandmarks;
+        let alertMsg: string | null = null;
+        let outCount = 0;
+
+        // Boundary checks
+        const head = landmarks[0];
+        const feet = [landmarks[31], landmarks[32], landmarks[27], landmarks[28]];
+        const leftSide = [landmarks[11], landmarks[13], landmarks[15], landmarks[23], landmarks[25]];
+        const rightSide = [landmarks[12], landmarks[14], landmarks[16], landmarks[24], landmarks[26]];
+
+        const isLowVisibility = CRITICAL_LANDMARKS.some(idx => {
+            const l = landmarks[idx];
+            return !l || l.visibility === undefined || l.visibility < 0.55;
+        });
+
+        if (head && head.y < 0.05) { alertMsg = "请向下移动或后退"; outCount++; }
+        else if (feet.some(f => f && f.y > 0.95)) { alertMsg = "请向上移动或后退"; outCount++; }
+        else if (leftSide.some(s => s && s.x < 0.05)) { alertMsg = facingMode === 'user' ? "请向左移动" : "请向右移动"; outCount++; }
+        else if (rightSide.some(s => s && s.x > 0.95)) { alertMsg = facingMode === 'user' ? "请向右移动" : "请向左移动"; outCount++; }
+        else if (isLowVisibility) { alertMsg = "请向后退，确保全身入镜"; outCount++; }
+
+        if (outCount > 1) alertMsg = "请向后退，让全身完全入镜";
+
+        setFrameAlert(alertMsg);
+
+        // Voice Alert (Throttle 10s)
+        if (alertMsg && Date.now() - lastVoiceRef.current > 10000) {
+            const speech = new SpeechSynthesisUtterance(alertMsg);
+            speech.lang = 'zh-CN';
+            speech.rate = 1.1;
+            window.speechSynthesis.cancel(); // Clear previous
+            window.speechSynthesis.speak(speech);
+            lastVoiceRef.current = Date.now();
+        }
+    }, [results, isDetecting, isPaused, facingMode]);
 
     // Recording Logic
     useEffect(() => {
@@ -344,7 +391,6 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                         exit={{ opacity: 0, scale: 0.95 }}
                         className="flex-1 flex flex-col items-center justify-center p-6 gap-6"
                     >
-                        {/* Selector Cards */}
                         <motion.div
                             whileTap={{ scale: 0.98 }}
                             className="premium-card"
@@ -397,17 +443,15 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                         animate={{ opacity: 1 }}
                         className="flex-1 flex flex-col relative"
                     >
-                        {/* Video Display Area - THE ALIGNMENT CORE */}
                         <div style={{
                             flex: 1,
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
-                            padding: '20px 16px 140px', // Extra bottom padding for controls
+                            padding: '20px 16px 140px',
                             position: 'relative',
                             overflow: 'hidden'
                         }}>
-                            {/* Physical Layer: This wrapper centers everything and stays identical for Video and Canvas */}
                             <div style={{
                                 position: 'relative',
                                 display: 'flex',
@@ -418,7 +462,6 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                                 borderRadius: 24,
                                 overflow: 'hidden',
                                 boxShadow: '0 20px 50px rgba(0,0,0,0.5)',
-                                // Mirroring applied to the whole stack for consistent coordinates
                                 transform: (method === 'camera' && facingMode === 'user') ? 'scaleX(-1)' : 'none'
                             }}>
                                 <video
@@ -431,7 +474,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                                     style={{
                                         maxWidth: '100%',
                                         maxHeight: '100%',
-                                        display: 'block' // Remove extra bottom spacing
+                                        display: 'block'
                                     }}
                                 />
 
@@ -448,8 +491,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                                     }}
                                 />
 
-                                {/* Scan Line Animation */}
-                                {isDetecting && !isPaused && (
+                                {isDetecting && !isPaused && !frameAlert && (
                                     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 15 }}>
                                         <motion.div
                                             animate={{ top: ['0%', '100%', '0%'] }}
@@ -471,6 +513,38 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                                     <span style={{ fontSize: 12, fontWeight: 800, color: 'white' }}>REC</span>
                                 </div>
                             )}
+
+                            {/* Frame Warning Overlay */}
+                            <AnimatePresence>
+                                {frameAlert && (
+                                    <motion.div
+                                        initial={{ opacity: 0, y: 20 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        exit={{ opacity: 0, y: 20 }}
+                                        style={{
+                                            position: 'absolute',
+                                            bottom: 160,
+                                            left: '50%',
+                                            transform: 'translateX(-50%)',
+                                            background: 'rgba(239, 68, 68, 0.9)',
+                                            padding: '12px 24px',
+                                            borderRadius: 16,
+                                            backdropFilter: 'blur(10px)',
+                                            color: 'white',
+                                            zIndex: 45,
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 10,
+                                            boxShadow: '0 10px 25px rgba(239, 68, 68, 0.4)',
+                                            width: 'auto',
+                                            whiteSpace: 'nowrap'
+                                        }}
+                                    >
+                                        <AlertCircle size={20} />
+                                        <span style={{ fontWeight: 700, fontSize: 16 }}>{frameAlert}</span>
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
 
                             {/* Countdown Overlay */}
                             {countdown !== null && (
@@ -521,7 +595,6 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                             )}
 
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                {/* Left Controls */}
                                 <div style={{ flex: 1, display: 'flex', gap: 10 }}>
                                     <button
                                         onClick={() => setIsDetecting(!isDetecting)}
@@ -566,7 +639,6 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                                     )}
                                 </div>
 
-                                {/* Center Analyze Button */}
                                 <div style={{ padding: '0 20px', position: 'relative' }}>
                                     <motion.button
                                         whileTap={{ scale: 0.9 }}
@@ -585,7 +657,6 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                                     <p style={{ fontSize: 10, fontWeight: 700, textAlign: 'center', marginTop: 8, color: 'var(--text-secondary)' }}>分析当前</p>
                                 </div>
 
-                                {/* Right Controls */}
                                 <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
                                     {method === 'camera' && (
                                         <button
@@ -596,7 +667,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                                         </button>
                                     )}
                                     <button
-                                        onClick={() => { setMethod(null); setVideoSrc(null); setIsPaused(false); }}
+                                        onClick={() => { setMethod(null); setVideoSrc(null); setIsPaused(false); window.speechSynthesis.cancel(); }}
                                         style={{ width: 48, height: 48, borderRadius: 14, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
                                     >
                                         <RotateCcw size={20} />
