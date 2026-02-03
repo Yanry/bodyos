@@ -143,18 +143,36 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
         }
     }, [method, videoSrc]);
 
-    // UI Feedback & Direction Logic
+    // UI Feedback & Direction Logic (REFINED)
     useEffect(() => {
-        if (!results?.poseLandmarks || !isDetecting || isPaused) {
+        if (!method || !isDetecting || isPaused) {
             setFrameAlert(null);
+            return;
+        }
+
+        // Case 1: No results yet or no landmarks found (Possible total out-of-frame)
+        if (!results || !results.poseLandmarks || results.poseLandmarks.length === 0) {
+            const msg = "未检测到人体，请进入画面";
+            setFrameAlert(msg);
+
+            // Voice Alert (Throttle 10s)
+            if (Date.now() - lastVoiceRef.current > 10000) {
+                const speech = new SpeechSynthesisUtterance(msg);
+                speech.lang = 'zh-CN';
+                speech.rate = 1.1;
+                window.speechSynthesis.cancel();
+                window.speechSynthesis.speak(speech);
+                lastVoiceRef.current = Date.now();
+            }
             return;
         }
 
         const landmarks = results.poseLandmarks;
         let alertMsg: string | null = null;
         let outCount = 0;
+        let directions: string[] = [];
 
-        // Boundary checks
+        // Boundary checks (Individual checks to count correctly)
         const head = landmarks[0];
         const feet = [landmarks[31], landmarks[32], landmarks[27], landmarks[28]];
         const leftSide = [landmarks[11], landmarks[13], landmarks[15], landmarks[23], landmarks[25]];
@@ -165,13 +183,25 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
             return !l || l.visibility === undefined || l.visibility < 0.55;
         });
 
-        if (head && head.y < 0.05) { alertMsg = "请向下移动或后退"; outCount++; }
-        else if (feet.some(f => f && f.y > 0.95)) { alertMsg = "请向上移动或后退"; outCount++; }
-        else if (leftSide.some(s => s && s.x < 0.05)) { alertMsg = facingMode === 'user' ? "请向左移动" : "请向右移动"; outCount++; }
-        else if (rightSide.some(s => s && s.x > 0.95)) { alertMsg = facingMode === 'user' ? "请向右移动" : "请向左移动"; outCount++; }
-        else if (isLowVisibility) { alertMsg = "请向后退，确保全身入镜"; outCount++; }
+        if (head && head.y < 0.05) { directions.push("向下移动"); outCount++; }
+        if (feet.some(f => f && f.y > 0.95)) { directions.push("向上移动"); outCount++; }
 
-        if (outCount > 1) alertMsg = "请向后退，让全身完全入镜";
+        if (leftSide.some(s => s && s.x < 0.05)) {
+            directions.push(facingMode === 'user' ? "向左移动" : "向右移动");
+            outCount++;
+        }
+        if (rightSide.some(s => s && s.x > 0.95)) {
+            directions.push(facingMode === 'user' ? "向右移动" : "向左移动");
+            outCount++;
+        }
+
+        if (outCount > 1) {
+            alertMsg = "请向后退，确保全身入镜";
+        } else if (directions.length > 0) {
+            alertMsg = `请${directions[0]}`;
+        } else if (isLowVisibility) {
+            alertMsg = "请稍微退后，确保全身完整";
+        }
 
         setFrameAlert(alertMsg);
 
@@ -180,11 +210,11 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
             const speech = new SpeechSynthesisUtterance(alertMsg);
             speech.lang = 'zh-CN';
             speech.rate = 1.1;
-            window.speechSynthesis.cancel(); // Clear previous
+            window.speechSynthesis.cancel();
             window.speechSynthesis.speak(speech);
             lastVoiceRef.current = Date.now();
         }
-    }, [results, isDetecting, isPaused, facingMode]);
+    }, [results, isDetecting, isPaused, facingMode, method]);
 
     // Recording Logic
     useEffect(() => {
@@ -523,7 +553,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                                         exit={{ opacity: 0, y: 20 }}
                                         style={{
                                             position: 'absolute',
-                                            bottom: 160,
+                                            bottom: 180,
                                             left: '50%',
                                             transform: 'translateX(-50%)',
                                             background: 'rgba(239, 68, 68, 0.9)',
