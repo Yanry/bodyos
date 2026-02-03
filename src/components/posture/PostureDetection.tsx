@@ -156,37 +156,43 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
             alertMsg = "未检测到人体，请进入画面";
         } else {
             const landmarks = results.poseLandmarks;
-            const head = landmarks[0];
-            const feet = [landmarks[31], landmarks[32], landmarks[27], landmarks[28]];
-            const leftSide = [landmarks[11], landmarks[13], landmarks[15], landmarks[23], landmarks[25]];
-            const rightSide = [landmarks[12], landmarks[14], landmarks[16], landmarks[24], landmarks[26]];
+            const sidesHit = new Set<string>();
 
-            let directions: string[] = [];
-            let outCount = 0;
+            // Boundary thresholds
+            const T = 0.02; // Top
+            const B = 0.98; // Bottom
+            const L = 0.02; // Left
+            const R = 0.98; // Right
 
-            const isLowVisibility = CRITICAL_LANDMARKS.some(idx => {
-                const l = landmarks[idx];
-                return !l || l.visibility === undefined || l.visibility < 0.55;
+            // Check all critical landmarks against all 4 boundaries
+            CRITICAL_LANDMARKS.forEach(idx => {
+                const p = landmarks[idx];
+                if (!p) return;
+                if (p.visibility !== undefined && p.visibility < 0.55) return;
+
+                if (p.y < T) sidesHit.add('top');
+                if (p.y > B) sidesHit.add('bottom');
+                if (p.x < L) sidesHit.add('left');
+                if (p.x > R) sidesHit.add('right');
             });
 
-            if (head && head.y < 0.05) { directions.push("向下移动"); outCount++; }
-            if (feet.some(f => f && f.y > 0.95)) { directions.push("向上移动"); outCount++; }
-
-            if (leftSide.some(s => s && s.x < 0.05)) {
-                directions.push(facingMode === 'user' ? "向左移动" : "向右移动");
-                outCount++;
-            }
-            if (rightSide.some(s => s && s.x > 0.95)) {
-                directions.push(facingMode === 'user' ? "向右移动" : "向左移动");
-                outCount++;
-            }
-
-            if (outCount > 1) {
+            // Decide alert based on number of unique sides hit
+            if (sidesHit.size === 1) {
+                if (sidesHit.has('top')) alertMsg = "请向下移动";
+                else if (sidesHit.has('bottom')) alertMsg = "请向上移动";
+                else if (sidesHit.has('left')) {
+                    alertMsg = facingMode === 'user' ? "请向左移动" : "请向右移动";
+                } else if (sidesHit.has('right')) {
+                    alertMsg = facingMode === 'user' ? "请向右移动" : "请向左移动";
+                }
+            } else if (sidesHit.size > 1) {
                 alertMsg = "请向后退，确保全身入镜";
-            } else if (directions.length > 0) {
-                alertMsg = `请${directions[0]}`;
-            } else if (isLowVisibility) {
-                alertMsg = "请向后退，确保全身完整";
+            } else {
+                const isPartiallyHidden = CRITICAL_LANDMARKS.some(idx => {
+                    const l = landmarks[idx];
+                    return !l || l.visibility === undefined || l.visibility < 0.55;
+                });
+                if (isPartiallyHidden) alertMsg = "请向后退，确保全身完整";
             }
         }
 
