@@ -27,6 +27,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const recordedChunksRef = useRef<Blob[]>([]);
     const lastVoiceRef = useRef<number>(0);
+    const lastMsgRef = useRef<string | null>(null);
 
     const [method, setMethod] = useState<'camera' | 'upload' | null>(null);
     const { results, detect } = usePoseDetection();
@@ -198,16 +199,22 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
 
         setFrameAlert(alertMsg);
 
-        // Unified Voice Alert Logic
-        if (alertMsg && Date.now() - lastVoiceRef.current > 10000) {
+        // Smart Voice Alert Logic
+        const now = Date.now();
+        const isNewMsg = alertMsg !== lastMsgRef.current;
+        const isThrottled = (now - lastVoiceRef.current) < 10000;
+
+        if (alertMsg && (isNewMsg || !isThrottled)) {
             const speech = new SpeechSynthesisUtterance(alertMsg);
             speech.lang = 'zh-CN';
             speech.rate = 1.1;
-            // Only speak if user has interacted (most browsers)
-            // Note: cancel() is called before speak to stop previous prompts quickly
             window.speechSynthesis.cancel();
             window.speechSynthesis.speak(speech);
-            lastVoiceRef.current = Date.now();
+
+            lastVoiceRef.current = now;
+            lastMsgRef.current = alertMsg;
+        } else if (!alertMsg) {
+            lastMsgRef.current = null;
         }
     }, [results, isDetecting, isPaused, facingMode, method]);
 
