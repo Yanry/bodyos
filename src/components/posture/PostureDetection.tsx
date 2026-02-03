@@ -216,12 +216,48 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
         }
     }, [results, isDetecting, isPaused, facingMode, method]);
 
-    // Recording Logic
+    // Voice Recognition Logic
     useEffect(() => {
-        if (isRecording && videoRef.current?.srcObject) {
+        if (!('webkitSpeechRecognition' in window) || method !== 'camera') return;
+
+        const Recognition = (window as any).webkitSpeechRecognition;
+        const recog = new Recognition();
+        recog.continuous = true;
+        recog.interimResults = true;
+        recog.lang = 'zh-CN';
+
+        recog.onresult = (event: any) => {
+            const result = event.results[event.results.length - 1];
+            const transcript = result[0].transcript.trim();
+            console.log("Voice Input:", transcript);
+
+            if (transcript.includes("开始录制") || transcript.includes("开始录像")) {
+                if (!isRecording) setIsRecording(true);
+            } else if (transcript.includes("结束录制") || transcript.includes("结束录像") || transcript.includes("停止录制")) {
+                if (isRecording) setIsRecording(false);
+            }
+        };
+
+        recog.onerror = (e: any) => console.error("Speech Recognition Error", e);
+        recog.onend = () => {
+            if (method === 'camera' && !isPaused) recog.start();
+        };
+
+        recog.start();
+        return () => recog.stop();
+    }, [method, isRecording, isPaused]);
+
+    // Recording Logic (CANVAS CAPTURE for Skeleton Inclusion)
+    useEffect(() => {
+        if (isRecording && canvasRef.current) {
             try {
-                const stream = videoRef.current.srcObject as MediaStream;
-                const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+                // Capture from Canvas at 30fps
+                const stream = canvasRef.current.captureStream(30);
+                const recorder = new MediaRecorder(stream, {
+                    mimeType: 'video/webm;codecs=vp9',
+                    videoBitsPerSecond: 3000000 // 3Mbps for quality
+                });
+
                 mediaRecorderRef.current = recorder;
                 recordedChunksRef.current = [];
 
@@ -234,7 +270,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
-                    a.download = `jiyi_recording_${Date.now()}.webm`;
+                    a.download = `jiyi_skeleton_record_${Date.now()}.webm`;
                     a.click();
                     URL.revokeObjectURL(url);
                 };
@@ -272,35 +308,54 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
         ctx.shadowBlur = 0;
     };
 
-    // Drawing Loop
+    // Refined Drawing Loop (Composite Video + Skeleton)
     useEffect(() => {
-        if (canvasRef.current && results?.poseLandmarks && isDetecting) {
-            const canvasCtx = canvasRef.current.getContext('2d');
-            if (!canvasCtx) return;
+        const video = videoRef.current;
+        const canvas = canvasRef.current;
+        if (!video || !canvas || !isDetecting) return;
 
-            canvasCtx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-            const landmarks = results.poseLandmarks;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
 
-            drawLine(canvasCtx, landmarks, TORSO, '#3b82f6');
-            drawLine(canvasCtx, landmarks, LEFT_ARM, '#10b981');
-            drawLine(canvasCtx, landmarks, RIGHT_ARM, '#10b981');
-            drawLine(canvasCtx, landmarks, LEFT_LEG, '#f59e0b');
-            drawLine(canvasCtx, landmarks, RIGHT_LEG, '#f59e0b');
-            drawLine(canvasCtx, landmarks, FACE, '#ec4899');
-
-            canvasCtx.fillStyle = 'white';
-            landmarks.forEach((p: any) => {
-                if (p.visibility > 0.5) {
-                    canvasCtx.beginPath();
-                    canvasCtx.arc(p.x * canvasCtx.canvas.width, p.y * canvasCtx.canvas.height, Math.max(2, canvasCtx.canvas.width / 250), 0, 2 * Math.PI);
-                    canvasCtx.fill();
+        let animFrame: number;
+        const draw = () => {
+            if (video.readyState >= 2) {
+                // 1. Draw Video Frame first (as background)
+                ctx.save();
+                // If camera mirrored, we need to mirror the frame on canvas too
+                if (method === 'camera' && facingMode === 'user') {
+                    ctx.translate(canvas.width, 0);
+                    ctx.scale(-1, 1);
                 }
-            });
-        } else if (canvasRef.current) {
-            const ctx = canvasRef.current.getContext('2d');
-            ctx?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-        }
-    }, [results, isDetecting]);
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                ctx.restore();
+
+                // 2. Clear skeleton area if no results yet, or proceed to draw
+                if (results?.poseLandmarks) {
+                    const landmarks = results.poseLandmarks;
+                    drawLine(ctx, landmarks, TORSO, '#3b82f6');
+                    drawLine(ctx, landmarks, LEFT_ARM, '#10b981');
+                    drawLine(ctx, landmarks, RIGHT_ARM, '#10b981');
+                    drawLine(ctx, landmarks, LEFT_LEG, '#f59e0b');
+                    drawLine(ctx, landmarks, RIGHT_LEG, '#f59e0b');
+                    drawLine(ctx, landmarks, FACE, '#ec4899');
+
+                    ctx.fillStyle = 'white';
+                    landmarks.forEach((p: any) => {
+                        if (p.visibility > 0.5) {
+                            ctx.beginPath();
+                            ctx.arc(p.x * ctx.canvas.width, p.y * ctx.canvas.height, Math.max(2, ctx.canvas.width / 250), 0, 2 * Math.PI);
+                            ctx.fill();
+                        }
+                    });
+                }
+            }
+            animFrame = requestAnimationFrame(draw);
+        };
+
+        animFrame = requestAnimationFrame(draw);
+        return () => cancelAnimationFrame(animFrame);
+    }, [results, isDetecting, method, facingMode]);
 
     // Detection Loop
     useEffect(() => {
@@ -492,8 +547,8 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                                 borderRadius: 24,
                                 overflow: 'hidden',
                                 boxShadow: '0 20px 50px rgba(0,0,0,0.5)',
-                                transform: (method === 'camera' && facingMode === 'user') ? 'scaleX(-1)' : 'none'
                             }}>
+                                {/* The original video is hidden when detecting camera, as we draw it to canvas */}
                                 <video
                                     ref={videoRef}
                                     autoPlay
@@ -504,19 +559,16 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                                     style={{
                                         maxWidth: '100%',
                                         maxHeight: '100%',
-                                        display: 'block'
+                                        display: method === 'camera' ? 'none' : 'block'
                                     }}
                                 />
 
                                 <canvas
                                     ref={canvasRef}
                                     style={{
-                                        position: 'absolute',
-                                        top: 0,
-                                        left: 0,
-                                        width: '100%',
-                                        height: '100%',
-                                        pointerEvents: 'none',
+                                        maxWidth: '100%',
+                                        maxHeight: '100%',
+                                        display: 'block',
                                         zIndex: 10
                                     }}
                                 />
@@ -544,37 +596,42 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                                 </div>
                             )}
 
-                            {/* Frame Warning Overlay */}
-                            <AnimatePresence>
-                                {frameAlert && (
-                                    <motion.div
-                                        initial={{ opacity: 0, y: 20 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                        exit={{ opacity: 0, y: 20 }}
-                                        style={{
-                                            position: 'absolute',
-                                            bottom: 180,
-                                            left: '50%',
-                                            transform: 'translateX(-50%)',
-                                            background: 'rgba(239, 68, 68, 0.9)',
-                                            padding: '12px 24px',
-                                            borderRadius: 16,
-                                            backdropFilter: 'blur(10px)',
-                                            color: 'white',
-                                            zIndex: 45,
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: 10,
-                                            boxShadow: '0 10px 25px rgba(239, 68, 68, 0.4)',
-                                            width: 'auto',
-                                            whiteSpace: 'nowrap'
-                                        }}
-                                    >
-                                        <AlertCircle size={20} />
-                                        <span style={{ fontWeight: 700, fontSize: 16 }}>{frameAlert}</span>
-                                    </motion.div>
-                                )}
-                            </AnimatePresence>
+                            {/* Frame Warning Overlay - FIXED CENTERING */}
+                            <div style={{
+                                position: 'absolute',
+                                bottom: 180,
+                                left: 0,
+                                right: 0,
+                                display: 'flex',
+                                justifyContent: 'center',
+                                pointerEvents: 'none',
+                                zIndex: 45
+                            }}>
+                                <AnimatePresence>
+                                    {frameAlert && (
+                                        <motion.div
+                                            initial={{ opacity: 0, y: 20 }}
+                                            animate={{ opacity: 1, y: 0 }}
+                                            exit={{ opacity: 0, y: 20 }}
+                                            style={{
+                                                background: 'rgba(239, 68, 68, 0.9)',
+                                                padding: '12px 24px',
+                                                borderRadius: 16,
+                                                backdropFilter: 'blur(10px)',
+                                                color: 'white',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: 10,
+                                                boxShadow: '0 10px 25px rgba(239, 68, 68, 0.4)',
+                                                whiteSpace: 'nowrap'
+                                            }}
+                                        >
+                                            <AlertCircle size={20} />
+                                            <span style={{ fontWeight: 700, fontSize: 16 }}>{frameAlert}</span>
+                                        </motion.div>
+                                    )}
+                                </AnimatePresence>
+                            </div>
 
                             {/* Countdown Overlay */}
                             {countdown !== null && (
