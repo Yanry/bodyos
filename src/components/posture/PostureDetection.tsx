@@ -63,9 +63,16 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                 const constraints = [
                     {
                         video: {
-                            facingMode: { ideal: facingMode },
+                            facingMode: { exact: facingMode },
                             width: { ideal: 1280 },
                             height: { ideal: 720 }
+                        }
+                    },
+                    {
+                        video: {
+                            facingMode: { ideal: facingMode },
+                            width: { ideal: 640 },
+                            height: { ideal: 480 }
                         }
                     },
                     {
@@ -77,13 +84,17 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                 let stream: MediaStream | null = null;
                 let lastError: any = null;
 
-                for (const constraint of constraints) {
+                for (let i = 0; i < constraints.length; i++) {
                     try {
-                        stream = await navigator.mediaDevices.getUserMedia(constraint);
-                        if (stream) break;
-                    } catch (err) {
+                        console.log(`Attempting camera constraint ${i}:`, constraints[i]);
+                        stream = await navigator.mediaDevices.getUserMedia(constraints[i]);
+                        if (stream) {
+                            console.log(`Successfully connected via constraint ${i}`);
+                            break;
+                        }
+                    } catch (err: any) {
                         lastError = err;
-                        console.warn(`Constraint failed, trying next...`, constraint, err);
+                        console.warn(`Constraint ${i} failed:`, err.message || err);
                     }
                 }
 
