@@ -247,10 +247,55 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
         return () => recog.stop();
     }, [method, isRecording, isPaused]);
 
+    // Audio Notification System
+    const playNotifySound = (type: 'start' | 'stop') => {
+        try {
+            const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
+            if (!AudioCtx) return;
+            const ctx = new AudioCtx();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+
+            if (type === 'start') {
+                osc.frequency.setValueAtTime(880, ctx.currentTime);
+                gain.gain.setValueAtTime(0, ctx.currentTime);
+                gain.gain.linearRampToValueAtTime(0.2, ctx.currentTime + 0.05);
+                gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+                osc.start(ctx.currentTime);
+                osc.stop(ctx.currentTime + 0.3);
+            } else {
+                osc.frequency.setValueAtTime(440, ctx.currentTime);
+                gain.gain.setValueAtTime(0, ctx.currentTime);
+                gain.gain.linearRampToValueAtTime(0.2, ctx.currentTime + 0.05);
+                gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+
+                const osc2 = ctx.createOscillator();
+                const gain2 = ctx.createGain();
+                osc2.connect(gain2);
+                gain2.connect(ctx.destination);
+                osc2.frequency.setValueAtTime(330, ctx.currentTime + 0.25);
+                gain2.gain.setValueAtTime(0, ctx.currentTime + 0.25);
+                gain2.gain.linearRampToValueAtTime(0.2, ctx.currentTime + 0.3);
+                gain2.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+
+                osc.start(ctx.currentTime);
+                osc.stop(ctx.currentTime + 0.2);
+                osc2.start(ctx.currentTime + 0.25);
+                osc2.stop(ctx.currentTime + 0.5);
+            }
+        } catch (e) {
+            console.warn("Audio feedback failed", e);
+        }
+    };
+
     // Recording Logic (CANVAS CAPTURE for Skeleton Inclusion)
     useEffect(() => {
         if (isRecording && canvasRef.current) {
             try {
+                playNotifySound('start');
                 // Capture from Canvas at 30fps
                 const stream = canvasRef.current.captureStream(30);
                 const recorder = new MediaRecorder(stream, {
@@ -266,6 +311,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                 };
 
                 recorder.onstop = () => {
+                    playNotifySound('stop');
                     const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
