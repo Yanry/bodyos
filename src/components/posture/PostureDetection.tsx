@@ -143,73 +143,62 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
         }
     }, [method, videoSrc]);
 
-    // UI Feedback & Direction Logic (REFINED)
+    // UI Feedback & Direction Logic (VOICE & UI UNIFIED)
     useEffect(() => {
         if (!method || !isDetecting || isPaused) {
             setFrameAlert(null);
             return;
         }
 
-        // Case 1: No results yet or no landmarks found (Possible total out-of-frame)
-        if (!results || !results.poseLandmarks || results.poseLandmarks.length === 0) {
-            const msg = "未检测到人体，请进入画面";
-            setFrameAlert(msg);
-
-            // Voice Alert (Throttle 10s)
-            if (Date.now() - lastVoiceRef.current > 10000) {
-                const speech = new SpeechSynthesisUtterance(msg);
-                speech.lang = 'zh-CN';
-                speech.rate = 1.1;
-                window.speechSynthesis.cancel();
-                window.speechSynthesis.speak(speech);
-                lastVoiceRef.current = Date.now();
-            }
-            return;
-        }
-
-        const landmarks = results.poseLandmarks;
         let alertMsg: string | null = null;
-        let outCount = 0;
-        let directions: string[] = [];
 
-        // Boundary checks (Individual checks to count correctly)
-        const head = landmarks[0];
-        const feet = [landmarks[31], landmarks[32], landmarks[27], landmarks[28]];
-        const leftSide = [landmarks[11], landmarks[13], landmarks[15], landmarks[23], landmarks[25]];
-        const rightSide = [landmarks[12], landmarks[14], landmarks[16], landmarks[24], landmarks[26]];
+        if (!results || !results.poseLandmarks || results.poseLandmarks.length === 0) {
+            alertMsg = "未检测到人体，请进入画面";
+        } else {
+            const landmarks = results.poseLandmarks;
+            const head = landmarks[0];
+            const feet = [landmarks[31], landmarks[32], landmarks[27], landmarks[28]];
+            const leftSide = [landmarks[11], landmarks[13], landmarks[15], landmarks[23], landmarks[25]];
+            const rightSide = [landmarks[12], landmarks[14], landmarks[16], landmarks[24], landmarks[26]];
 
-        const isLowVisibility = CRITICAL_LANDMARKS.some(idx => {
-            const l = landmarks[idx];
-            return !l || l.visibility === undefined || l.visibility < 0.55;
-        });
+            let directions: string[] = [];
+            let outCount = 0;
 
-        if (head && head.y < 0.05) { directions.push("向下移动"); outCount++; }
-        if (feet.some(f => f && f.y > 0.95)) { directions.push("向上移动"); outCount++; }
+            const isLowVisibility = CRITICAL_LANDMARKS.some(idx => {
+                const l = landmarks[idx];
+                return !l || l.visibility === undefined || l.visibility < 0.55;
+            });
 
-        if (leftSide.some(s => s && s.x < 0.05)) {
-            directions.push(facingMode === 'user' ? "向左移动" : "向右移动");
-            outCount++;
-        }
-        if (rightSide.some(s => s && s.x > 0.95)) {
-            directions.push(facingMode === 'user' ? "向右移动" : "向左移动");
-            outCount++;
-        }
+            if (head && head.y < 0.05) { directions.push("向下移动"); outCount++; }
+            if (feet.some(f => f && f.y > 0.95)) { directions.push("向上移动"); outCount++; }
 
-        if (outCount > 1) {
-            alertMsg = "请向后退，确保全身入镜";
-        } else if (directions.length > 0) {
-            alertMsg = `请${directions[0]}`;
-        } else if (isLowVisibility) {
-            alertMsg = "请稍微退后，确保全身完整";
+            if (leftSide.some(s => s && s.x < 0.05)) {
+                directions.push(facingMode === 'user' ? "向左移动" : "向右移动");
+                outCount++;
+            }
+            if (rightSide.some(s => s && s.x > 0.95)) {
+                directions.push(facingMode === 'user' ? "向右移动" : "向左移动");
+                outCount++;
+            }
+
+            if (outCount > 1) {
+                alertMsg = "请向后退，确保全身入镜";
+            } else if (directions.length > 0) {
+                alertMsg = `请${directions[0]}`;
+            } else if (isLowVisibility) {
+                alertMsg = "请向后退，确保全身完整";
+            }
         }
 
         setFrameAlert(alertMsg);
 
-        // Voice Alert (Throttle 10s)
+        // Unified Voice Alert Logic
         if (alertMsg && Date.now() - lastVoiceRef.current > 10000) {
             const speech = new SpeechSynthesisUtterance(alertMsg);
             speech.lang = 'zh-CN';
             speech.rate = 1.1;
+            // Only speak if user has interacted (most browsers)
+            // Note: cancel() is called before speak to stop previous prompts quickly
             window.speechSynthesis.cancel();
             window.speechSynthesis.speak(speech);
             lastVoiceRef.current = Date.now();
