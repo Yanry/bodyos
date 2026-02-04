@@ -367,7 +367,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
             landmarks.forEach((p: any) => {
                 if (p.visibility > 0.5) {
                     canvasCtx.beginPath();
-                    canvasCtx.arc(p.x * canvasCtx.canvas.width, p.y * canvasCtx.canvas.height, 6, 0, 2 * Math.PI);
+                    canvasCtx.arc(p.x * canvasCtx.canvas.width, p.y * canvasCtx.canvas.height, 3.5, 0, 2 * Math.PI);
                     canvasCtx.fill();
                 }
             });
