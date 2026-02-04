@@ -322,13 +322,13 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
         }
     }, [isRecording]);
 
-    // Drawing Helper
-    const drawLine = (ctx: CanvasRenderingContext2D, landmarks: any, connections: number[][], color: string) => {
-        ctx.strokeStyle = color;
-        ctx.lineWidth = Math.max(3, ctx.canvas.width / 200);
+    // Drawing Helper - Unified cyan-green style with thin dashed lines
+    const drawLine = (ctx: CanvasRenderingContext2D, landmarks: any, connections: number[][]) => {
+        ctx.strokeStyle = '#10b981'; // Unified cyan-green color
+        ctx.lineWidth = 1; // Very thin line
         ctx.lineCap = 'round';
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = color;
+        ctx.setLineDash([4, 4]); // Dashed line pattern
+        ctx.shadowBlur = 0;
 
         connections.forEach(([i, j]) => {
             const p1 = landmarks[i];
@@ -340,7 +340,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                 ctx.stroke();
             }
         });
-        ctx.shadowBlur = 0;
+        ctx.setLineDash([]); // Reset dash pattern
     };
 
     // Drawing Loop
@@ -352,21 +352,26 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
             canvasCtx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
             const landmarks = results.poseLandmarks;
 
-            drawLine(canvasCtx, landmarks, TORSO, '#3b82f6');
-            drawLine(canvasCtx, landmarks, LEFT_ARM, '#10b981');
-            drawLine(canvasCtx, landmarks, RIGHT_ARM, '#10b981');
-            drawLine(canvasCtx, landmarks, LEFT_LEG, '#f59e0b');
-            drawLine(canvasCtx, landmarks, RIGHT_LEG, '#f59e0b');
-            drawLine(canvasCtx, landmarks, FACE, '#ec4899');
+            // Draw all connections with unified style
+            drawLine(canvasCtx, landmarks, TORSO);
+            drawLine(canvasCtx, landmarks, LEFT_ARM);
+            drawLine(canvasCtx, landmarks, RIGHT_ARM);
+            drawLine(canvasCtx, landmarks, LEFT_LEG);
+            drawLine(canvasCtx, landmarks, RIGHT_LEG);
+            drawLine(canvasCtx, landmarks, FACE);
 
-            canvasCtx.fillStyle = 'white';
+            // Draw larger, prominent joint points with glow
+            canvasCtx.fillStyle = '#10b981';
+            canvasCtx.shadowBlur = 8;
+            canvasCtx.shadowColor = '#10b981';
             landmarks.forEach((p: any) => {
                 if (p.visibility > 0.5) {
                     canvasCtx.beginPath();
-                    canvasCtx.arc(p.x * canvasCtx.canvas.width, p.y * canvasCtx.canvas.height, Math.max(2, canvasCtx.canvas.width / 250), 0, 2 * Math.PI);
+                    canvasCtx.arc(p.x * canvasCtx.canvas.width, p.y * canvasCtx.canvas.height, 6, 0, 2 * Math.PI);
                     canvasCtx.fill();
                 }
             });
+            canvasCtx.shadowBlur = 0;
         } else if (canvasRef.current) {
             const ctx = canvasRef.current.getContext('2d');
             ctx?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
