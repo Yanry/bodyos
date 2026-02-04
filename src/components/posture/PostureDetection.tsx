@@ -57,6 +57,8 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
             let metadataTimeout: any;
 
             const setupCamera = async () => {
+                console.log(`[Camera] Setup attempt ${retryCountRef.current + 1}, facingMode: ${facingMode}`);
+
                 // Ensure previous resources are clean
                 if (videoRef.current?.srcObject instanceof MediaStream) {
                     videoRef.current.srcObject.getTracks().forEach(t => t.stop());
@@ -90,7 +92,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                         console.log(`[Camera] Attempting constraint ${i}:`, constraints[i]);
                         stream = await navigator.mediaDevices.getUserMedia(constraints[i]);
                         if (stream) {
-                            console.log(`[Camera] Connected successfully via constraint ${i}`);
+                            console.log(`[Camera] Stream obtained via constraint ${i}`);
                             break;
                         }
                     } catch (err: any) {
@@ -119,27 +121,47 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                         clearTimeout(metadataTimeout);
                         console.log(`[Camera] Metadata loaded - ${video.videoWidth}x${video.videoHeight}`);
 
-                        // Start aggressive watchdog: If still no pixels after 2s, retry
-                        watchdog = setTimeout(() => {
-                            if (isActive && video.videoWidth === 0 && retryCountRef.current < 1) {
-                                console.warn("[Camera] Watchdog triggered - No video dimensions. Retrying...");
-                                retryCountRef.current += 1;
-                                setupCamera();
-                            }
-                        }, 2000);
+                        if (video.videoWidth > 0) {
+                            console.log("[Camera] ✓ Video initialized successfully");
+                            retryCountRef.current = 0; // Reset on success
+                        } else {
+                            // Start aggressive watchdog: If still no pixels after 1.5s, retry
+                            watchdog = setTimeout(() => {
+                                if (isActive && video.videoWidth === 0) {
+                                    console.warn(`[Camera] Watchdog triggered - No video dimensions (retry ${retryCountRef.current + 1}/3)`);
+
+                                    if (retryCountRef.current < 2) {
+                                        retryCountRef.current += 1;
+                                        setupCamera();
+                                    } else if (facingMode === 'user') {
+                                        // Last resort: try rear camera
+                                        console.warn("[Camera] Switching to rear camera as fallback");
+                                        retryCountRef.current = 0;
+                                        setFacingMode('environment');
+                                    }
+                                }
+                            }, 1500);
+                        }
                     };
 
                     video.addEventListener('loadedmetadata', onMetadataLoaded, { once: true });
 
-                    // Fallback: if metadata doesn't load in 3s, retry anyway
+                    // Fallback: if metadata doesn't load in 2.5s, retry anyway
                     metadataTimeout = setTimeout(() => {
-                        if (isActive && video.videoWidth === 0 && retryCountRef.current < 1) {
-                            console.warn("[Camera] Metadata timeout - forcing retry");
-                            retryCountRef.current += 1;
-                            video.removeEventListener('loadedmetadata', onMetadataLoaded);
-                            setupCamera();
+                        if (isActive && video.videoWidth === 0) {
+                            console.warn(`[Camera] Metadata timeout (retry ${retryCountRef.current + 1}/3)`);
+
+                            if (retryCountRef.current < 2) {
+                                retryCountRef.current += 1;
+                                video.removeEventListener('loadedmetadata', onMetadataLoaded);
+                                setupCamera();
+                            } else if (facingMode === 'user') {
+                                console.warn("[Camera] Switching to rear camera as fallback");
+                                retryCountRef.current = 0;
+                                setFacingMode('environment');
+                            }
                         }
-                    }, 3000);
+                    }, 2500);
 
                     try {
                         await video.play();
