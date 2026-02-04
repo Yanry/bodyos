@@ -15,6 +15,9 @@ const FACE = [[0, 1], [0, 4], [1, 2], [2, 3], [3, 7], [4, 5], [5, 6], [6, 8]];
 // Landmarks to monitor for visibility/clipping
 const CRITICAL_LANDMARKS = [0, 15, 16, 23, 24, 27, 28, 31, 32];
 
+// Key joints to display: shoulders (11,12), elbows (13,14), hips (23,24), knees (25,26), ankles (27,28)
+const KEY_JOINTS = [11, 12, 13, 14, 23, 24, 25, 26, 27, 28];
+
 interface Props {
     onComplete: (metrics: PostureMetrics) => void;
     onBack: () => void;
@@ -325,9 +328,9 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
     // Drawing Helper - Unified cyan-green style with thin dashed lines
     const drawLine = (ctx: CanvasRenderingContext2D, landmarks: any, connections: number[][]) => {
         ctx.strokeStyle = '#10b981'; // Unified cyan-green color
-        ctx.lineWidth = 1; // Very thin line
+        ctx.lineWidth = 0.3; // Very thin line
         ctx.lineCap = 'round';
-        ctx.setLineDash([4, 4]); // Dashed line pattern
+        ctx.setLineDash([2, 2]); // Smaller, denser dashed pattern
         ctx.shadowBlur = 0;
 
         connections.forEach(([i, j]) => {
@@ -360,12 +363,13 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
             drawLine(canvasCtx, landmarks, RIGHT_LEG);
             drawLine(canvasCtx, landmarks, FACE);
 
-            // Draw larger, prominent joint points with glow
+            // Draw only key joint points (shoulders, elbows, hips, knees, ankles)
             canvasCtx.fillStyle = '#10b981';
             canvasCtx.shadowBlur = 8;
             canvasCtx.shadowColor = '#10b981';
-            landmarks.forEach((p: any) => {
-                if (p.visibility > 0.5) {
+            KEY_JOINTS.forEach((idx) => {
+                const p = landmarks[idx];
+                if (p && (p.visibility ?? 0) > 0.5) {
                     canvasCtx.beginPath();
                     canvasCtx.arc(p.x * canvasCtx.canvas.width, p.y * canvasCtx.canvas.height, 3.5, 0, 2 * Math.PI);
                     canvasCtx.fill();
