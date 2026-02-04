@@ -54,6 +54,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
             let currentStream: MediaStream | null = null;
             let isActive = true;
             let watchdog: any;
+            let metadataTimeout: any;
 
             const setupCamera = async () => {
                 // Ensure previous resources are clean
@@ -65,7 +66,7 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                 const constraints = [
                     {
                         video: {
-                            facingMode: { ideal: facingMode }, // Use ideal for broader compatibility
+                            facingMode: { ideal: facingMode },
                             width: { ideal: 1280 },
                             height: { ideal: 720 }
                         }
@@ -110,19 +111,39 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
 
                 currentStream = stream;
                 if (videoRef.current) {
-                    videoRef.current.srcObject = stream;
-                    try {
-                        await videoRef.current.play();
-                        console.log("[Camera] Video playback started");
+                    const video = videoRef.current;
+                    video.srcObject = stream;
 
-                        // Start Watchdog: If no pixels after 3s, retry once
+                    // Wait for metadata to load (critical for mobile)
+                    const onMetadataLoaded = () => {
+                        clearTimeout(metadataTimeout);
+                        console.log(`[Camera] Metadata loaded - ${video.videoWidth}x${video.videoHeight}`);
+
+                        // Start aggressive watchdog: If still no pixels after 2s, retry
                         watchdog = setTimeout(() => {
-                            if (isActive && videoRef.current && videoRef.current.videoWidth === 0 && retryCountRef.current < 1) {
-                                console.warn("[Camera] Watchdog triggered - No video feed detected. Retrying...");
+                            if (isActive && video.videoWidth === 0 && retryCountRef.current < 1) {
+                                console.warn("[Camera] Watchdog triggered - No video dimensions. Retrying...");
                                 retryCountRef.current += 1;
                                 setupCamera();
                             }
-                        }, 3000);
+                        }, 2000);
+                    };
+
+                    video.addEventListener('loadedmetadata', onMetadataLoaded, { once: true });
+
+                    // Fallback: if metadata doesn't load in 3s, retry anyway
+                    metadataTimeout = setTimeout(() => {
+                        if (isActive && video.videoWidth === 0 && retryCountRef.current < 1) {
+                            console.warn("[Camera] Metadata timeout - forcing retry");
+                            retryCountRef.current += 1;
+                            video.removeEventListener('loadedmetadata', onMetadataLoaded);
+                            setupCamera();
+                        }
+                    }, 3000);
+
+                    try {
+                        await video.play();
+                        console.log("[Camera] Video playback started");
                     } catch (e) {
                         console.warn("[Camera] Playback failed", e);
                     }
@@ -136,10 +157,11 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
                 isActive = false;
                 clearTimeout(mountTimeout);
                 clearTimeout(watchdog);
+                clearTimeout(metadataTimeout);
                 if (currentStream) {
                     currentStream.getTracks().forEach(track => track.stop());
                 }
-                retryCountRef.current = 0; // Reset on unmount
+                retryCountRef.current = 0;
             };
         }
     }, [method, facingMode]);
