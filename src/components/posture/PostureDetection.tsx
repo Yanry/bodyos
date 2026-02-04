@@ -328,9 +328,9 @@ export const PostureDetection: React.FC<Props> = ({ onComplete, onBack }) => {
     // Drawing Helper - Unified cyan-green style with thin dashed lines
     const drawLine = (ctx: CanvasRenderingContext2D, landmarks: any, connections: number[][]) => {
         ctx.strokeStyle = '#10b981'; // Unified cyan-green color
-        ctx.lineWidth = 0.3; // Very thin line
+        ctx.lineWidth = 1; // Very thin line
         ctx.lineCap = 'round';
-        ctx.setLineDash([2, 2]); // Smaller, denser dashed pattern
+        ctx.setLineDash([1, 1]); // Smaller, denser dashed pattern
         ctx.shadowBlur = 0;
 
         connections.forEach(([i, j]) => {
